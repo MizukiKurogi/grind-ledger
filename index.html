@@ -1,0 +1,1427 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Grind Ledger</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<style>
+  :root{
+    --bg:#f1f3ec;
+    --surface:#ffffff;
+    --surface-2:#e7eae0;
+    --surface-3:#dde1d5;
+    --ink:#171b1a;
+    --ink-muted:#5b655f;
+    --ink-faint:#8b958e;
+    --border:rgba(23,27,26,.12);
+    --border-strong:rgba(23,27,26,.22);
+    --accent:#a8681a;
+    --accent-ink:#fffaf1;
+    --accent-soft:rgba(168,104,26,.12);
+    --accent-2:#187a68;
+    --accent-2-soft:rgba(24,122,104,.12);
+    --success:#2f8f52;
+    --success-soft:rgba(47,143,82,.12);
+    --danger:#b8402f;
+    --danger-soft:rgba(184,64,47,.12);
+    --shadow:0 1px 2px rgba(23,27,26,.06),0 10px 28px rgba(23,27,26,.07);
+    --radius:14px;
+    --radius-sm:9px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#12161a;
+      --surface:#1a2025;
+      --surface-2:#212830;
+      --surface-3:#2a323b;
+      --ink:#edf1ee;
+      --ink-muted:#9aa6a0;
+      --ink-faint:#6d7972;
+      --border:rgba(237,241,238,.10);
+      --border-strong:rgba(237,241,238,.18);
+      --accent:#e8a33d;
+      --accent-ink:#181008;
+      --accent-soft:rgba(232,163,61,.16);
+      --accent-2:#4fc4ae;
+      --accent-2-soft:rgba(79,196,174,.14);
+      --success:#63c584;
+      --success-soft:rgba(99,197,132,.14);
+      --danger:#e2685a;
+      --danger-soft:rgba(226,104,90,.14);
+      --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px rgba(0,0,0,.40);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12161a;
+    --surface:#1a2025;
+    --surface-2:#212830;
+    --surface-3:#2a323b;
+    --ink:#edf1ee;
+    --ink-muted:#9aa6a0;
+    --ink-faint:#6d7972;
+    --border:rgba(237,241,238,.10);
+    --border-strong:rgba(237,241,238,.18);
+    --accent:#e8a33d;
+    --accent-ink:#181008;
+    --accent-soft:rgba(232,163,61,.16);
+    --accent-2:#4fc4ae;
+    --accent-2-soft:rgba(79,196,174,.14);
+    --success:#63c584;
+    --success-soft:rgba(99,197,132,.14);
+    --danger:#e2685a;
+    --danger-soft:rgba(226,104,90,.14);
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px rgba(0,0,0,.40);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Zen Kaku Gothic New',"Hiragino Sans","Yu Gothic",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums;}
+  h1,h2,h3{text-wrap:balance;margin:0;}
+  button{font-family:inherit;}
+  input,select{font-family:inherit;}
+
+  .app{max-width:880px;margin:0 auto;padding-block:20px 64px;display:flex;flex-direction:column;gap:16px;}
+
+  /* ---------- masthead ---------- */
+  .masthead{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow);
+    padding:20px 22px 22px;
+    position:relative;
+    overflow:hidden;
+  }
+  .masthead::before{
+    content:"";
+    position:absolute; inset:0 0 auto 0; height:3px;
+    background:linear-gradient(90deg,var(--accent),var(--accent-2));
+  }
+  .masthead-top{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  .eyebrow{
+    font-weight:900;font-size:13px;letter-spacing:.14em;color:var(--accent);
+    display:flex;align-items:center;gap:8px;
+  }
+  .eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--accent-2);box-shadow:0 0 0 3px var(--accent-2-soft);}
+  .icon-btn{
+    border:1px solid var(--border);background:var(--surface-2);color:var(--ink-muted);
+    border-radius:999px;width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;font-size:16px;transition:background .15s,color .15s;
+  }
+  .icon-btn:hover{background:var(--surface-3);color:var(--ink);}
+  .icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .clock-row{margin-top:16px;display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;}
+  .clock-date{font-weight:900;font-size:clamp(22px,4.4vw,32px);letter-spacing:-.01em;}
+  .clock-date .yr{color:var(--ink-muted);font-weight:700;font-size:.62em;margin-right:.35em;}
+  .clock-time{font-weight:600;font-size:clamp(20px,4vw,28px);color:var(--ink-muted);}
+
+  .hero-revenue{margin-top:18px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;}
+  .hero-label{font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--ink-faint);text-transform:uppercase;margin-bottom:4px;}
+  .hero-value{font-weight:700;font-size:clamp(30px,7vw,46px);color:var(--accent);line-height:1;}
+  .sparkline-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+  .sparkline-cap{font-size:11px;color:var(--ink-faint);}
+  svg.sparkline{height:44px;width:180px;max-width:44vw;}
+
+  /* ---------- today strip ---------- */
+  .today-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .stat-chip{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
+    padding:12px 12px;display:flex;flex-direction:column;gap:4px;min-width:0;
+  }
+  .stat-chip .stat-label{font-size:11px;font-weight:700;color:var(--ink-faint);letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .stat-chip .stat-value{font-weight:700;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .stat-chip .stat-sub{font-size:11px;color:var(--ink-muted);}
+  @media (max-width:560px){ .today-strip{grid-template-columns:repeat(2,1fr);} }
+
+  /* ---------- tabs ---------- */
+  .tabs{
+    display:flex;gap:4px;background:var(--surface-2);border:1px solid var(--border);
+    border-radius:999px;padding:4px;position:sticky;top:8px;z-index:5;backdrop-filter:blur(6px);
+  }
+  .tab-btn{
+    flex:1;border:none;background:transparent;color:var(--ink-muted);font-weight:700;font-size:13.5px;
+    padding:9px 6px;border-radius:999px;cursor:pointer;transition:background .15s,color .15s;
+  }
+  .tab-btn.active{background:var(--accent);color:var(--accent-ink);}
+  .tab-btn:not(.active):hover{color:var(--ink);}
+  .tab-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .panel{display:none;flex-direction:column;gap:14px;}
+  .panel.active{display:flex;}
+
+  /* ---------- cards / rows ---------- */
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:16px;box-shadow:var(--shadow);
+  }
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;}
+  .card-title{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px;}
+  .card-title .swatch{width:9px;height:9px;border-radius:3px;}
+  .card-sub{font-size:12px;color:var(--ink-faint);margin-top:2px;}
+
+  .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .field{display:flex;flex-direction:column;gap:5px;}
+  .field label{font-size:11.5px;font-weight:700;color:var(--ink-muted);}
+  .input,select.input{
+    background:var(--surface-2);border:1px solid var(--border);color:var(--ink);
+    border-radius:8px;padding:9px 10px;font-size:14px;width:100%;transition:border-color .15s;
+  }
+  .input:focus{outline:none;border-color:var(--accent);}
+  .input.mono{font-weight:600;}
+
+  .btn{
+    border:1px solid var(--border-strong);background:var(--surface-2);color:var(--ink);
+    border-radius:9px;padding:10px 16px;font-weight:700;font-size:13.5px;cursor:pointer;
+    transition:transform .1s,background .15s,border-color .15s;
+  }
+  .btn:hover{background:var(--surface-3);}
+  .btn:active{transform:scale(.97);}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);}
+  .btn-primary:hover{filter:brightness(1.06);background:var(--accent);}
+  .btn-danger{background:transparent;border-color:var(--danger);color:var(--danger);}
+  .btn-danger:hover{background:var(--danger-soft);}
+  .btn-block{width:100%;}
+  .btn-sm{padding:6px 10px;font-size:12px;border-radius:7px;}
+  .btn[disabled]{opacity:.5;cursor:not-allowed;}
+
+  .row{
+    display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--border);
+  }
+  .row:last-child{border-bottom:none;}
+  .row-main{flex:1;min-width:0;}
+  .row-title{font-weight:600;font-size:14px;overflow-wrap:anywhere;}
+  .row-title.done{color:var(--ink-faint);text-decoration:line-through;}
+  .row-meta{font-size:11.5px;color:var(--ink-faint);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap;}
+
+  .chip{
+    display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;
+    font-size:11px;font-weight:700;white-space:nowrap;
+  }
+  .chip-accent{background:var(--accent-soft);color:var(--accent);}
+  .chip-accent2{background:var(--accent-2-soft);color:var(--accent-2);}
+  .chip-success{background:var(--success-soft);color:var(--success);}
+  .chip-danger{background:var(--danger-soft);color:var(--danger);}
+  .chip-muted{background:var(--surface-2);color:var(--ink-faint);border:1px solid var(--border);}
+
+  .checkbox{
+    width:22px;height:22px;flex-shrink:0;border-radius:6px;border:2px solid var(--border-strong);
+    background:var(--surface-2);cursor:pointer;display:flex;align-items:center;justify-content:center;
+    color:var(--accent-ink);font-size:13px;transition:background .15s,border-color .15s;
+  }
+  .checkbox.checked{background:var(--success);border-color:var(--success);}
+
+  .toggle2{display:inline-flex;border:1px solid var(--border-strong);border-radius:999px;padding:3px;background:var(--surface-2);}
+  .toggle2 button{
+    border:none;background:transparent;color:var(--ink-muted);font-weight:700;font-size:12.5px;
+    padding:7px 14px;border-radius:999px;cursor:pointer;
+  }
+  .toggle2 button.on{background:var(--success);color:#fff;}
+  .toggle2 button.off-active{background:var(--surface-3);color:var(--ink);}
+
+  .empty-note{color:var(--ink-faint);font-size:13px;padding:14px 2px;text-align:center;}
+
+  .divider{height:1px;background:var(--border);margin:2px 0;}
+
+  .progress-track{height:8px;border-radius:999px;background:var(--surface-2);overflow:hidden;border:1px solid var(--border);}
+  .progress-fill{height:100%;background:var(--accent-2);border-radius:999px;transition:width .3s;}
+  .progress-fill.over{background:var(--danger);}
+
+  .bar-row{display:flex;align-items:center;gap:10px;font-size:12.5px;}
+  .bar-row .bar-label{width:84px;flex-shrink:0;color:var(--ink-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-track{flex:1;height:10px;border-radius:999px;background:var(--surface-2);overflow:hidden;border:1px solid var(--border);}
+  .bar-fill{height:100%;background:var(--accent);border-radius:999px;}
+  .bar-value{width:74px;flex-shrink:0;text-align:right;font-weight:600;}
+
+  .seq-strip{display:flex;gap:6px;flex-wrap:wrap;}
+  .seq-node{
+    flex:1;min-width:54px;text-align:center;padding:8px 4px;border-radius:9px;
+    background:var(--surface-2);border:1px solid var(--border);font-size:11px;color:var(--ink-faint);font-weight:700;
+  }
+  .seq-node.current{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);}
+  .seq-node.rest-node{font-style:italic;}
+
+  .ex-card{border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;background:var(--surface-2);}
+  .ex-card + .ex-card{margin-top:10px;}
+  .ex-head{display:flex;align-items:flex-start;gap:10px;}
+  .ex-name{font-weight:700;font-size:14px;}
+  .ex-name.done{color:var(--ink-faint);text-decoration:line-through;}
+  .ex-target{font-size:11px;color:var(--ink-faint);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap;}
+  .set-table{margin-top:10px;display:flex;flex-direction:column;gap:6px;}
+  .set-row{display:flex;align-items:center;gap:8px;}
+  .set-row .set-idx{width:18px;flex-shrink:0;font-size:12px;color:var(--ink-faint);font-weight:700;text-align:center;}
+  .set-row .input{padding:7px 8px;font-size:13.5px;}
+  .set-row .set-x{color:var(--ink-faint);font-size:12px;flex-shrink:0;}
+  .set-remove{flex-shrink:0;width:26px;height:26px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--ink-faint);cursor:pointer;font-size:13px;}
+  .set-remove:hover{background:var(--danger-soft);color:var(--danger);border-color:var(--danger);}
+  .set-add-btn{margin-top:2px;}
+
+  .receipt-card{border:1.5px dashed var(--border-strong);border-radius:var(--radius-sm);padding:14px;text-align:center;background:var(--surface-2);}
+  .receipt-preview{max-height:160px;border-radius:8px;margin:10px auto 0;display:block;}
+
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50;}
+  .modal{background:var(--surface);border-radius:var(--radius);padding:20px;max-width:380px;width:100%;box-shadow:var(--shadow);border:1px solid var(--border);}
+  .modal h3{font-size:16px;margin-bottom:14px;}
+  .modal .field{margin-bottom:12px;}
+  .modal-actions{display:flex;gap:8px;margin-top:6px;}
+
+  .toast{
+    position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--bg);
+    padding:11px 18px;border-radius:999px;font-size:13px;font-weight:600;box-shadow:var(--shadow);z-index:60;
+    max-width:88vw;text-align:center;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]) .toast{background:var(--surface-3);color:var(--ink);border:1px solid var(--border-strong);} }
+  :root[data-theme="dark"] .toast{background:var(--surface-3);color:var(--ink);border:1px solid var(--border-strong);}
+
+  [hidden]{display:none !important;}
+  @media (prefers-reduced-motion:reduce){ *{transition:none !important;} }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <span class="eyebrow"><span class="dot"></span>GRIND LEDGER</span>
+      <button class="icon-btn" id="settingsBtn" title="単価・予算の設定" aria-label="設定">⚙</button>
+    </div>
+    <div class="clock-row">
+      <div class="clock-date mono" id="clockDate">–</div>
+      <div class="clock-time mono" id="clockTime">–</div>
+    </div>
+    <div class="hero-revenue">
+      <div>
+        <div class="hero-label">今月の総売上</div>
+        <div class="hero-value mono" id="monthRevenue">¥0</div>
+      </div>
+      <div class="sparkline-wrap">
+        <svg class="sparkline" id="sparkline" viewBox="0 0 180 44" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <span class="sparkline-cap">直近7日の売上</span>
+      </div>
+    </div>
+  </header>
+
+  <section class="today-strip" id="todayStrip" aria-label="今日のサマリー"></section>
+
+  <nav class="tabs" role="tablist" aria-label="セクション">
+    <button class="tab-btn active" data-tab="tasks" role="tab" aria-selected="true">タスク</button>
+    <button class="tab-btn" data-tab="income" role="tab" aria-selected="false">収入</button>
+    <button class="tab-btn" data-tab="expense" role="tab" aria-selected="false">支出</button>
+    <button class="tab-btn" data-tab="workout" role="tab" aria-selected="false">筋トレ</button>
+  </nav>
+
+  <main>
+    <!-- ===== TASKS ===== -->
+    <section class="panel active" id="panel-tasks">
+      <div class="card">
+        <div class="card-head"><div class="card-title">タスクを追加</div></div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <input class="input" id="taskInput" placeholder="例）出前館のバッテリー充電" maxlength="120">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <select class="input" id="taskCategory" style="max-width:140px;">
+              <option value="仕事">仕事</option>
+              <option value="プライベート">プライベート</option>
+              <option value="その他">その他</option>
+            </select>
+            <input class="input" id="taskDue" type="date" style="max-width:160px;">
+            <button class="btn btn-primary" id="taskAddBtn" style="flex-shrink:0;">追加</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">未完了</div><span class="chip chip-muted" id="taskOpenCount">0件</span></div>
+        <div id="taskOpenList"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">完了済み</div><span class="chip chip-muted" id="taskDoneCount">0件</span></div>
+        <div id="taskDoneList"></div>
+      </div>
+    </section>
+
+    <!-- ===== INCOME ===== -->
+    <section class="panel" id="panel-income">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">記入日</div>
+          <input class="input mono" id="incomeDate" type="date" style="max-width:160px;">
+        </div>
+        <div class="card-sub" id="incomeDayTotal">この日の合計：¥0</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><span class="swatch" style="background:var(--accent)"></span>出前館</div>
+          <span class="chip chip-accent" id="demaeTotalChip">¥0</span>
+        </div>
+        <div class="card-sub" style="margin-bottom:10px;">1日2回まで。記入がない枠は0円として扱います。</div>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div>
+            <div style="font-weight:700;font-size:12.5px;color:var(--ink-muted);margin-bottom:6px;">AM枠</div>
+            <div class="field-grid" style="grid-template-columns:1fr 1fr 1fr;">
+              <div class="field"><label>開始</label><input class="input" id="demaeAmStart" type="time"></div>
+              <div class="field"><label>終了</label><input class="input" id="demaeAmEnd" type="time"></div>
+              <div class="field"><label>売上(円)</label><input class="input mono" id="demaeAmAmount" type="number" min="0" step="100" placeholder="0"></div>
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:12.5px;color:var(--ink-muted);margin-bottom:6px;">PM枠</div>
+            <div class="field-grid" style="grid-template-columns:1fr 1fr 1fr;">
+              <div class="field"><label>開始</label><input class="input" id="demaePmStart" type="time"></div>
+              <div class="field"><label>終了</label><input class="input" id="demaePmEnd" type="time"></div>
+              <div class="field"><label>売上(円)</label><input class="input mono" id="demaePmAmount" type="number" min="0" step="100" placeholder="0"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><span class="swatch" style="background:var(--accent-2)"></span>gopal</div>
+          <span class="chip chip-accent2" id="gopalTotalChip">¥0</span>
+        </div>
+        <div class="card-sub" style="margin-bottom:10px;">出勤した日は固定給が自動で加算されます。</div>
+        <div class="toggle2" id="gopalToggle">
+          <button type="button" data-val="true">出勤</button>
+          <button type="button" data-val="false">休み</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><span class="swatch" style="background:var(--success)"></span>動画編集</div>
+          <span class="chip chip-success" id="videoTotalChip">¥0</span>
+        </div>
+        <div class="field" style="max-width:160px;">
+          <label>納品本数</label>
+          <input class="input mono" id="videoCount" type="number" min="0" step="1" placeholder="0">
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-block" id="incomeSaveBtn">この日を保存</button>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">今月の内訳</div><span class="chip chip-muted" id="incomeMonthCount">0日分</span></div>
+        <div id="incomeMonthList"></div>
+      </div>
+    </section>
+
+    <!-- ===== EXPENSE ===== -->
+    <section class="panel" id="panel-expense">
+      <div class="card">
+        <div class="card-head"><div class="card-title">今月の支出</div><span class="mono" id="expenseMonthTotal" style="font-weight:700;font-size:16px;">¥0</span></div>
+        <div class="card-sub" style="margin-bottom:8px;" id="expenseBudgetLabel">予算 ¥0 中</div>
+        <div class="progress-track"><div class="progress-fill" id="expenseProgress" style="width:0%;"></div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">📷 レシートをAIで解析</div></div>
+        <div class="card-sub" style="margin-bottom:10px;">写真から店名・金額・カテゴリを読み取って下書きを作成します（写真自体は保存されません）。</div>
+        <div class="receipt-card" id="receiptDrop">
+          <input type="file" id="receiptFile" accept="image/*" capture="environment" style="display:none;">
+          <button class="btn btn-primary" id="receiptPickBtn">レシート写真を選ぶ</button>
+          <div id="receiptStatus" class="card-sub" style="margin-top:8px;"></div>
+          <img id="receiptPreview" class="receipt-preview" hidden>
+        </div>
+        <div id="receiptConfirm" hidden style="margin-top:14px;display:flex;flex-direction:column;gap:10px;">
+          <div class="field-grid">
+            <div class="field"><label>店名</label><input class="input" id="rcStore"></div>
+            <div class="field"><label>金額(円)</label><input class="input mono" id="rcAmount" type="number" min="0" step="1"></div>
+            <div class="field"><label>日付</label><input class="input" id="rcDate" type="date"></div>
+            <div class="field"><label>カテゴリ</label>
+              <select class="input" id="rcCategory"></select>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary" id="rcSaveBtn" style="flex:1;">家計簿に記帳する</button>
+            <button class="btn" id="rcDiscardBtn">破棄</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">手入力で追加</div></div>
+        <div class="field-grid" style="margin-bottom:10px;">
+          <div class="field"><label>日付</label><input class="input" id="exDate" type="date"></div>
+          <div class="field"><label>金額(円)</label><input class="input mono" id="exAmount" type="number" min="0" step="1"></div>
+          <div class="field"><label>カテゴリ</label><select class="input" id="exCategory"></select></div>
+          <div class="field"><label>メモ</label><input class="input" id="exMemo" placeholder="任意" maxlength="60"></div>
+        </div>
+        <button class="btn btn-primary btn-block" id="exAddBtn">追加する</button>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">カテゴリ別</div></div>
+        <div id="expenseCategoryBars" style="display:flex;flex-direction:column;gap:9px;"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">今月の明細</div></div>
+        <div id="expenseList"></div>
+      </div>
+    </section>
+
+    <!-- ===== WORKOUT ===== -->
+    <section class="panel" id="panel-workout">
+      <div class="card" id="workoutStatusCard">
+        <div class="card-head">
+          <div class="card-title" id="workoutTitle">読み込み中…</div>
+          <span class="chip" id="workoutStatusChip"></span>
+        </div>
+        <div class="card-sub" id="workoutSub"></div>
+        <div class="field" style="margin-top:12px;max-width:280px;">
+          <label>今日のメニューを変更</label>
+          <select class="input" id="workoutMenuSelect"></select>
+        </div>
+        <div class="card-sub" style="margin-top:6px;">「休み」に変更すると、本来のメニューは翌日以降にスライドします。</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">ローテーション</div></div>
+        <div class="seq-strip" id="seqStrip"></div>
+        <div class="card-sub" style="margin-top:8px;">未完了があれば、次の日も同じメニューが消化日として繰り越されます。</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">今日のメニュー</div><span class="chip chip-muted" id="workoutProgressChip">0/0</span></div>
+        <div id="workoutList"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal-backdrop" id="settingsModal" hidden>
+  <div class="modal">
+    <h3>設定</h3>
+    <div class="field">
+      <label>動画編集 単価（円/本）</label>
+      <input class="input mono" id="setVideoPrice" type="number" min="0" step="100">
+    </div>
+    <div class="field">
+      <label>gopal 固定給（円/日）</label>
+      <input class="input mono" id="setGopalFixed" type="number" min="0" step="500">
+    </div>
+    <div class="field">
+      <label>支出の月予算（円）</label>
+      <input class="input mono" id="setExpenseBudget" type="number" min="0" step="1000">
+    </div>
+    <div class="field">
+      <label>データ保存先（Web App URL）</label>
+      <input class="input" id="setWebappUrl" type="url" placeholder="https://script.google.com/macros/s/xxxx/exec">
+      <div id="setWebappStatus" style="font-size:12px;color:var(--muted);margin-top:6px;min-height:16px;"></div>
+      <button class="btn btn-sm" id="setWebappTestBtn" style="margin-top:6px;" type="button">接続テスト＆保存</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="setSaveBtn" style="flex:1;">保存</button>
+      <button class="btn" id="setCloseBtn">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="setupModal" hidden>
+  <div class="modal">
+    <h3>初期設定</h3>
+    <p style="font-size:13px;line-height:1.7;color:var(--muted);margin:0 0 14px;">
+      データの保存先として、あなたの Google スプレッドシートを使います。<br>
+      Apps Script を Web App として公開し、その URL をここに入力してください（手順は README.md を参照）。
+    </p>
+    <div class="field">
+      <label>Web App URL</label>
+      <input class="input" id="setupUrlInput" type="url" placeholder="https://script.google.com/macros/s/xxxx/exec">
+    </div>
+    <div id="setupStatus" style="font-size:13px;color:var(--muted);min-height:18px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="setupSaveBtn" style="flex:1;" type="button">保存して接続</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function(){
+  'use strict';
+
+  /* ================= constants ================= */
+  var WEEKDAY_JP = ['日','月','火','水','木','金','土'];
+
+  // 筋トレのローテーション（キュー）。休みも順番の中の1枠として扱う。
+  var QUEUE = [
+    {key:'upperChestOuterDelt', label:'胸上部+肩外側'},
+    {key:'legsRearDelt', label:'脚+肩後部'},
+    {key:'backWidthBiceps', label:'背中広がり+二頭'},
+    {key:'midChestTriceps', label:'胸中部+三頭'},
+    {key:'outerDeltBackThickness', label:'肩外側+背中厚み'},
+    {key:'arms', label:'腕'},
+    {key:'rest', label:'休み'},
+    {key:'upperChestBackWidth', label:'胸上部+背中広がり'}
+  ];
+  function queueLabel(key){ var f=QUEUE.filter(function(q){return q.key===key;})[0]; return f?f.label:key; }
+  function queueIndexOf(key){ for(var i=0;i<QUEUE.length;i++){ if(QUEUE[i].key===key) return i; } return -1; }
+
+  // ex: {name, sets(目標セット数), repLow, repHigh, rir, tempo, restSec}
+  var EXERCISES = {
+    upperChestOuterDelt:[
+      {name:'インクラインスミスマシンプレス',sets:3,repLow:6,repHigh:10,rir:'2',tempo:'3-0-1-0',restSec:120},
+      {name:'インクラインダンベルプレス',sets:3,repLow:8,repHigh:12,rir:'1-2',tempo:'3-1-1-0',restSec:90},
+      {name:'インクラインダンベルフライ',sets:3,repLow:10,repHigh:15,rir:'1',tempo:'3-1-1-0',restSec:75},
+      {name:'Pec Fly',sets:3,repLow:12,repHigh:15,rir:'0-1',tempo:'3-1-2-1',restSec:60},
+      {name:'ケーブルクロス(下→上)',sets:3,repLow:15,repHigh:20,rir:'0-1',tempo:'2-1-2-1',restSec:60},
+      {name:'ダンベルサイドレイズ',sets:4,repLow:15,repHigh:20,rir:'0-1',tempo:'2-1-2-1',restSec:45},
+      {name:'Abdominal Machine',sets:4,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45}
+    ],
+    legsRearDelt:[
+      {name:'スミススクワット',sets:3,repLow:8,repHigh:10,rir:'2',tempo:'3-0-1-0',restSec:120},
+      {name:'Seated Leg Press',sets:3,repLow:10,repHigh:15,rir:'1-2',tempo:'3-0-1-0',restSec:90},
+      {name:'Leg Curl',sets:4,repLow:12,repHigh:15,rir:'1',tempo:'2-1-2-0',restSec:75},
+      {name:'Leg Extension',sets:4,repLow:12,repHigh:15,rir:'1',tempo:'2-1-2-0',restSec:60},
+      {name:'Abductor',sets:3,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45},
+      {name:'Adductor',sets:3,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45},
+      {name:'リアデルト',sets:4,repLow:15,repHigh:20,rir:'0-1',tempo:'2-1-2-1',restSec:45},
+      {name:'Calf Raise',sets:4,repLow:12,repHigh:20,rir:'0-1',tempo:'2-1-2-1',restSec:45}
+    ],
+    backWidthBiceps:[
+      {name:'ラットプルダウン',sets:4,repLow:10,repHigh:12,rir:'2',tempo:'2-1-2-0',restSec:90},
+      {name:'ワンハンドダンベルロー',sets:4,repLow:10,repHigh:12,rir:'1-2',tempo:'2-1-3-0',restSec:90},
+      {name:'シーテッドケーブルロー',sets:3,repLow:10,repHigh:12,rir:'1-2',tempo:'2-1-2-0',restSec:75},
+      {name:'ケーブルプルオーバー',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'2-1-3-0',restSec:60},
+      {name:'インクラインダンベルカール',sets:3,repLow:10,repHigh:12,rir:'1',tempo:'2-1-3-0',restSec:60},
+      {name:'ハンマーカール',sets:3,repLow:10,repHigh:12,rir:'1',tempo:'2-1-2-0',restSec:60},
+      {name:'Abdominal Machine',sets:4,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45}
+    ],
+    midChestTriceps:[
+      {name:'チェストプレス',sets:3,repLow:10,repHigh:12,rir:'2',tempo:'2-1-2-0',restSec:100},
+      {name:'ダンベルフライ',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'3-1-1-0',restSec:75},
+      {name:'ケーブルクロス(下→上)',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'2-1-2-1',restSec:60},
+      {name:'ケーブルプレスダウン',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'2-1-2-0',restSec:60},
+      {name:'オーバーヘッドケーブルEX',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'2-1-2-0',restSec:60},
+      {name:'Abdominal Machine',sets:4,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45}
+    ],
+    outerDeltBackThickness:[
+      {name:'ダンベルショルダープレス',sets:3,repLow:10,repHigh:12,rir:'2',tempo:'2-1-2-0',restSec:90},
+      {name:'ダンベルサイドレイズ',sets:4,repLow:15,repHigh:20,rir:'0-1',tempo:'2-1-2-1',restSec:45},
+      {name:'ワンハンドダンベルロー',sets:4,repLow:10,repHigh:12,rir:'1-2',tempo:'2-1-3-0',restSec:90},
+      {name:'シーテッドケーブルロー',sets:3,repLow:10,repHigh:12,rir:'1-2',tempo:'2-1-2-0',restSec:75},
+      {name:'リアデルト',sets:4,repLow:15,repHigh:20,rir:'0-1',tempo:'2-1-2-1',restSec:45},
+      {name:'Face Pull',sets:3,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45}
+    ],
+    arms:[
+      {name:'インクラインダンベルカール',sets:3,repLow:10,repHigh:12,rir:'1',tempo:'2-1-3-0',restSec:60},
+      {name:'ハンマーカール',sets:3,repLow:10,repHigh:12,rir:'1',tempo:'2-1-2-0',restSec:60},
+      {name:'バーベルカール',sets:3,repLow:8,repHigh:10,rir:'2',tempo:'2-1-2-0',restSec:75},
+      {name:'ケーブルプレスダウン',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'2-1-2-0',restSec:60},
+      {name:'オーバーヘッドケーブルEX',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'2-1-2-0',restSec:60},
+      {name:'Abdominal Machine',sets:4,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45}
+    ],
+    upperChestBackWidth:[
+      {name:'インクラインダンベルプレス',sets:3,repLow:8,repHigh:12,rir:'1-2',tempo:'3-1-1-0',restSec:90},
+      {name:'スミスインクラインプレス',sets:3,repLow:6,repHigh:10,rir:'2',tempo:'3-0-1-0',restSec:120},
+      {name:'ラットプルダウン',sets:4,repLow:10,repHigh:12,rir:'2',tempo:'2-1-2-0',restSec:90},
+      {name:'ケーブルプルオーバー',sets:3,repLow:12,repHigh:15,rir:'1',tempo:'2-1-3-0',restSec:60},
+      {name:'Abdominal Machine',sets:4,repLow:15,repHigh:20,rir:'1',tempo:'2-1-2-0',restSec:45}
+    ]
+  };
+  function buildItemsFor(key){
+    var list = EXERCISES[key];
+    if(!list) return [];
+    return list.map(function(ex){
+      var setLog=[]; for(var i=0;i<ex.sets;i++) setLog.push({kg:null,reps:null});
+      return { name:ex.name, sets:ex.sets, repLow:ex.repLow, repHigh:ex.repHigh, rir:ex.rir, tempo:ex.tempo, restSec:ex.restSec, completed:false, log:setLog };
+    });
+  }
+
+  var EXPENSE_CATEGORIES = ['食費','日用品','交通','娯楽','衣服・美容','交際費','その他'];
+  var CATEGORY_COLOR = {'食費':'var(--accent)','日用品':'var(--accent-2)','交通':'var(--success)','娯楽':'#8a6fd8','衣服・美容':'#d1699a','交際費':'#4a90d9','その他':'var(--ink-faint)'};
+
+  /* ================= helpers ================= */
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  function toDateStr(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
+  function todayDate(){ return new Date(); }
+  function todayStr(){ return toDateStr(todayDate()); }
+  function monthRange(dateStr){
+    var y=+dateStr.slice(0,4), m=+dateStr.slice(5,7);
+    var first=y+'-'+pad2(m)+'-01';
+    var lastDay=new Date(y,m,0).getDate();
+    var last=y+'-'+pad2(m)+'-'+pad2(lastDay);
+    return {first:first,last:last};
+  }
+  var yenFmt = new Intl.NumberFormat('ja-JP',{style:'currency',currency:'JPY',maximumFractionDigits:0});
+  function yen(n){ return yenFmt.format(Math.round(n||0)); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function clamp(n,a,b){ return Math.max(a,Math.min(b,n)); }
+  // db から返るドキュメントは凍結されている場合があるため、後から編集できるよう複製してから使う。
+  function clone(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
+
+  function toast(msg){
+    var el=document.getElementById('toast');
+    el.textContent=msg; el.hidden=false;
+    clearTimeout(toast._t);
+    toast._t=setTimeout(function(){ el.hidden=true; },3200);
+  }
+
+  /* ================= state ================= */
+  // このバージョン（GitHub / 自前ホスティング版）は、Claudeのdb/sample機能の代わりに
+  // Google Apps Script 経由で Google スプレッドシートへ保存し、
+  // レシート画像のAI解析も同じApps Script経由（Gemini API）で行う。
+  var WEBAPP_URL = localStorage.getItem('gl_webapp_url') || '';
+  var backendReady = false;
+
+  var settings={ videoUnitPrice:2000, gopalFixed:15000, expenseBudget:30000 };
+  var tasksCache=[];
+  var incomeMonthDocs=[]; // {date,...} for current month
+  var incomeDayDoc=null;  // currently edited day
+  var expenseMonthDocs=[]; // {id,date,amount,category,memo,...}
+  var revenueSeries=[]; // last 7 days [{date,total}]
+  var workoutLogToday=null; // {date,queueIndex,assignedKey,effectiveKey,manualOverride,carried,items:[...]}
+  var gopalWorked=false;
+  var currentTab='tasks';
+  var pendingReceipt=null;
+
+  /* ================= boot ================= */
+  async function boot(){
+    populateCategorySelects();
+    wireStaticUI();
+    startClock();
+
+    if(!WEBAPP_URL){
+      showSetupModal();
+      return; // Web App URLが未設定の間はデータ読み込みを行わない
+    }
+
+    var pingOk = await testBackendConnection(true);
+    if(!pingOk){ showSetupModal(); return; }
+
+    await loadSettings();
+    document.getElementById('incomeDate').value = todayStr();
+    document.getElementById('exDate').value = todayStr();
+
+    var loadResults = await Promise.allSettled([ loadTasks(), loadIncomeDay(todayStr()), loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth(), ensureTodayWorkout() ]);
+    loadResults.forEach(function(r){ if(r.status==='rejected') console.error('initial load failed',r.reason); });
+    renderAll();
+  }
+
+  function showSetupModal(){
+    document.getElementById('setupModal').hidden=false;
+    document.getElementById('setupUrlInput').value=WEBAPP_URL;
+  }
+  async function testBackendConnection(silent){
+    if(!WEBAPP_URL) return false;
+    try{
+      var r = await callBackend('ping',{});
+      backendReady = !!(r && r.pong);
+      return backendReady;
+    }catch(e){
+      backendReady=false;
+      if(!silent) toast('接続できませんでした：'+e.message);
+      return false;
+    }
+  }
+
+  /* ================= generic store adapters (Google Sheets 経由) ================= */
+  var SHEET_OF = { tasks:'Tasks', income:'Income', expenses:'Expenses', workoutLog:'WorkoutLog', settings:'Settings' };
+  async function callBackend(action,payload){
+    if(!WEBAPP_URL) throw new Error('保存先(Web App URL)が未設定です');
+    var res = await fetch(WEBAPP_URL, {
+      method:'POST',
+      headers:{ 'Content-Type':'text/plain;charset=utf-8' }, // CORSのプリフライトを避けるため text/plain で送る
+      body: JSON.stringify(Object.assign({action:action}, payload))
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    var json = await res.json();
+    if(!json.ok) throw new Error(json.error||'バックエンドエラー');
+    return json.result;
+  }
+  async function docGet(path){
+    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
+    if(!sheet) return null;
+    try{ return clone(await callBackend('docGet',{sheet:sheet, id:parts[1]})); }
+    catch(e){ console.error('docGet',path,e); return null; }
+  }
+  async function docSet(path,data){
+    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
+    if(!sheet) return;
+    try{ await callBackend('docSet',{sheet:sheet, id:parts[1], data:data}); }
+    catch(e){ console.error('docSet',path,e); toast('保存に失敗しました：'+e.message); }
+  }
+  async function docUpdate(path,data){
+    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
+    if(!sheet) return;
+    try{ await callBackend('docUpdate',{sheet:sheet, id:parts[1], data:data}); }
+    catch(e){ console.error('docUpdate',path,e); toast('更新に失敗しました：'+e.message); }
+  }
+  async function docDelete(path){
+    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
+    if(!sheet) return;
+    try{ await callBackend('docDelete',{sheet:sheet, id:parts[1]}); }
+    catch(e){ console.error('docDelete',path,e); toast('削除に失敗しました：'+e.message); }
+  }
+  async function collAdd(name,data){
+    var sheet=SHEET_OF[name];
+    try{ var r = await callBackend('collAdd',{sheet:sheet, data:data}); return r && r.id; }
+    catch(e){ console.error('collAdd',name,e); toast('保存に失敗しました：'+e.message); return null; }
+  }
+  async function collQueryRange(name,field,ge,le,orderDir){
+    var sheet=SHEET_OF[name];
+    try{
+      var out = clone(await callBackend('collQueryRange',{sheet:sheet, field:field, ge:ge, le:le})) || [];
+      out.sort(function(a,b){ return orderDir==='desc' ? (a[field]<b[field]?1:-1) : (a[field]>b[field]?1:-1); });
+      return out;
+    }catch(e){ console.error('query',name,e); return []; }
+  }
+  async function collAll(name){
+    var sheet=SHEET_OF[name];
+    try{
+      var out = clone(await callBackend('collList',{sheet:sheet})) || [];
+      out.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+      return out;
+    }catch(e){ console.error('collAll',name,e); return []; }
+  }
+
+  /* ================= settings ================= */
+  async function loadSettings(){
+    var s = await docGet('settings/app');
+    if(s) settings = Object.assign({},settings,s);
+  }
+  async function saveSettings(next){
+    settings = Object.assign({},settings,next);
+    await docSet('settings/app', settings);
+  }
+
+  /* ================= clock ================= */
+  var lastKnownDate=null;
+  var rollingOver=false;
+  function startClock(){
+    function tick(){
+      var d=new Date();
+      var ds=toDateStr(d);
+      document.getElementById('clockDate').innerHTML =
+        '<span class="yr">'+d.getFullYear()+'</span>'+pad2(d.getMonth()+1)+'/'+pad2(d.getDate())+' ('+WEEKDAY_JP[d.getDay()]+')';
+      document.getElementById('clockTime').textContent = pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());
+      if(lastKnownDate===null){ lastKnownDate=ds; }
+      else if(ds!==lastKnownDate && !rollingOver){
+        var prev=lastKnownDate; lastKnownDate=ds;
+        handleDayRollover(prev,ds);
+      }
+    }
+    tick(); setInterval(tick,1000);
+  }
+  // 日付をまたいでタブを開きっぱなしにしていた場合、次の日になった瞬間に
+  // 筋トレのローテーションや今日の集計を自動で切り替える。
+  async function handleDayRollover(prevDate,newDate){
+    rollingOver=true;
+    try{
+      var incomeDateInput=document.getElementById('incomeDate');
+      var exDateInput=document.getElementById('exDate');
+      if(incomeDateInput && incomeDateInput.value===prevDate){ incomeDateInput.value=newDate; await loadIncomeDay(newDate); }
+      if(exDateInput && exDateInput.value===prevDate){ exDateInput.value=newDate; }
+      await ensureTodayWorkout();
+      await Promise.all([loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth()]);
+      renderAll();
+      toast('日付が変わったので、筋トレメニューと集計を更新しました');
+    }catch(e){ console.error('day rollover failed',e); }
+    finally{ rollingOver=false; }
+  }
+
+  /* ================= tasks ================= */
+  async function loadTasks(){ tasksCache = await collAll('tasks'); }
+  async function addTask(){
+    try{
+      var input=document.getElementById('taskInput');
+      var title=input.value.trim();
+      if(!title){ toast('タスク内容を入力してください'); return; }
+      var category=document.getElementById('taskCategory').value;
+      var due=document.getElementById('taskDue').value||null;
+      var newId = await collAdd('tasks',{ title:title, category:category, due:due, done:false, createdAt:Date.now() });
+      if(!newId){ toast('タスクの追加に失敗しました。もう一度お試しください'); return; }
+      input.value=''; document.getElementById('taskDue').value='';
+      await loadTasks(); renderTasks(); renderTodayStrip();
+    }catch(e){
+      console.error('addTask failed',e);
+      toast('タスクの追加に失敗しました。もう一度お試しください');
+    }
+  }
+  async function toggleTask(id,done){
+    try{
+      await docUpdate('tasks/'+id,{done:done});
+      await loadTasks(); renderTasks(); renderTodayStrip();
+    }catch(e){ console.error('toggleTask failed',e); toast('更新に失敗しました'); }
+  }
+  async function deleteTask(id){
+    try{
+    await docDelete('tasks/'+id);
+    await loadTasks(); renderTasks(); renderTodayStrip();
+    }catch(e){ console.error('deleteTask failed',e); toast('削除に失敗しました'); }
+  }
+  function renderTasks(){
+    var open=tasksCache.filter(function(t){return !t.done;});
+    var done=tasksCache.filter(function(t){return t.done;});
+    document.getElementById('taskOpenCount').textContent=open.length+'件';
+    document.getElementById('taskDoneCount').textContent=done.length+'件';
+    document.getElementById('taskOpenList').innerHTML = open.length? open.map(taskRow).join('') : '<div class="empty-note">未完了のタスクはありません</div>';
+    document.getElementById('taskDoneList').innerHTML = done.length? done.map(taskRow).join('') : '<div class="empty-note">まだ完了したタスクはありません</div>';
+    Array.prototype.forEach.call(document.querySelectorAll('[data-task-check]'),function(el){
+      el.addEventListener('click',function(){ toggleTask(el.getAttribute('data-task-check'), el.getAttribute('data-done')!=='1'); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-task-del]'),function(el){
+      el.addEventListener('click',function(){ deleteTask(el.getAttribute('data-task-del')); });
+    });
+  }
+  function taskRow(t){
+    var metaBits=[];
+    metaBits.push('<span class="chip '+(t.category==='仕事'?'chip-accent':t.category==='プライベート'?'chip-accent2':'chip-muted')+'">'+esc(t.category||'その他')+'</span>');
+    if(t.due) metaBits.push('<span>期限 '+esc(t.due)+'</span>');
+    return '<div class="row">'
+      +'<div class="checkbox'+(t.done?' checked':'')+'" data-task-check="'+t.id+'" data-done="'+(t.done?'1':'0')+'">'+(t.done?'✓':'')+'</div>'
+      +'<div class="row-main"><div class="row-title'+(t.done?' done':'')+'">'+esc(t.title)+'</div><div class="row-meta">'+metaBits.join('')+'</div></div>'
+      +'<button class="btn btn-danger btn-sm" data-task-del="'+t.id+'">削除</button>'
+      +'</div>';
+  }
+
+  /* ================= income ================= */
+  function dayRevenue(doc){
+    if(!doc) return 0;
+    var am=(doc.demaeAm&&doc.demaeAm.amount)||0;
+    var pm=(doc.demaePm&&doc.demaePm.amount)||0;
+    var gp=(doc.gopal&&doc.gopal.worked)?settings.gopalFixed:0;
+    var vid=((doc.video&&doc.video.count)||0)*settings.videoUnitPrice;
+    return am+pm+gp+vid;
+  }
+  async function loadIncomeDay(dateStr){
+    incomeDayDoc = await docGet('income/'+dateStr) || {};
+  }
+  async function loadIncomeMonth(){
+    var r = monthRange(todayStr());
+    incomeMonthDocs = await collQueryRange('income','date',r.first,r.last,'asc');
+  }
+  async function loadRevenueSeries(){
+    var end=todayDate();
+    var start=addDays(end,-6);
+    var docs = await collQueryRange('income','date',toDateStr(start),toDateStr(end),'asc');
+    var byDate={}; docs.forEach(function(d){ byDate[d.date]=d; });
+    revenueSeries=[];
+    for(var i=6;i>=0;i--){
+      var d=addDays(end,-i); var ds=toDateStr(d);
+      revenueSeries.push({date:ds, total: dayRevenue(byDate[ds])});
+    }
+  }
+  function fillIncomeForm(){
+    var d=incomeDayDoc||{};
+    document.getElementById('demaeAmStart').value=(d.demaeAm&&d.demaeAm.start)||'';
+    document.getElementById('demaeAmEnd').value=(d.demaeAm&&d.demaeAm.end)||'';
+    document.getElementById('demaeAmAmount').value=(d.demaeAm&&d.demaeAm.amount)||'';
+    document.getElementById('demaePmStart').value=(d.demaePm&&d.demaePm.start)||'';
+    document.getElementById('demaePmEnd').value=(d.demaePm&&d.demaePm.end)||'';
+    document.getElementById('demaePmAmount').value=(d.demaePm&&d.demaePm.amount)||'';
+    gopalWorked = !!(d.gopal&&d.gopal.worked);
+    document.getElementById('videoCount').value=(d.video&&d.video.count)||'';
+    updateIncomeLiveTotals();
+    renderGopalToggle();
+  }
+  function renderGopalToggle(){
+    var wrap=document.getElementById('gopalToggle');
+    Array.prototype.forEach.call(wrap.children,function(btn){
+      var v = btn.getAttribute('data-val')==='true';
+      btn.classList.toggle('on', v && gopalWorked);
+      btn.classList.toggle('off-active', !v && !gopalWorked);
+    });
+  }
+  function updateIncomeLiveTotals(){
+    var am=+document.getElementById('demaeAmAmount').value||0;
+    var pm=+document.getElementById('demaePmAmount').value||0;
+    var gp=gopalWorked?settings.gopalFixed:0;
+    var vid=(+document.getElementById('videoCount').value||0)*settings.videoUnitPrice;
+    document.getElementById('demaeTotalChip').textContent=yen(am+pm);
+    document.getElementById('gopalTotalChip').textContent=yen(gp);
+    document.getElementById('videoTotalChip').textContent=yen(vid);
+    document.getElementById('incomeDayTotal').textContent='この日の合計：'+yen(am+pm+gp+vid);
+  }
+  async function saveIncomeDay(){
+    var dateStr=document.getElementById('incomeDate').value || todayStr();
+    var data={
+      date:dateStr,
+      demaeAm:{ start:document.getElementById('demaeAmStart').value||null, end:document.getElementById('demaeAmEnd').value||null, amount:+document.getElementById('demaeAmAmount').value||0 },
+      demaePm:{ start:document.getElementById('demaePmStart').value||null, end:document.getElementById('demaePmEnd').value||null, amount:+document.getElementById('demaePmAmount').value||0 },
+      gopal:{ worked:gopalWorked },
+      video:{ count:+document.getElementById('videoCount').value||0 },
+      updatedAt:Date.now()
+    };
+    await docSet('income/'+dateStr, data);
+    incomeDayDoc=data;
+    toast(dateStr+' を保存しました');
+    await Promise.all([loadIncomeMonth(), loadRevenueSeries()]);
+    renderIncomeMonthList(); renderHero(); renderSparkline(); renderTodayStrip();
+  }
+  function renderIncomeMonthList(){
+    document.getElementById('incomeMonthCount').textContent=incomeMonthDocs.length+'日分';
+    if(!incomeMonthDocs.length){ document.getElementById('incomeMonthList').innerHTML='<div class="empty-note">今月の記録はまだありません</div>'; return; }
+    var sorted=incomeMonthDocs.slice().sort(function(a,b){ return a.date<b.date?1:-1; });
+    document.getElementById('incomeMonthList').innerHTML = sorted.map(function(d){
+      var total=dayRevenue(d);
+      var dow=WEEKDAY_JP[new Date(d.date+'T00:00:00').getDay()];
+      return '<div class="row"><div class="row-main"><div class="row-title">'+d.date+' ('+dow+')</div>'
+        +'<div class="row-meta">出前館 '+yen((d.demaeAm&&d.demaeAm.amount||0)+(d.demaePm&&d.demaePm.amount||0))
+        +' ・ gopal '+((d.gopal&&d.gopal.worked)?'出勤':'休み')
+        +' ・ 動画 '+((d.video&&d.video.count)||0)+'本</div></div>'
+        +'<div class="mono" style="font-weight:700;">'+yen(total)+'</div></div>';
+    }).join('');
+  }
+
+  /* ================= hero / sparkline / today strip ================= */
+  function renderHero(){
+    var total=incomeMonthDocs.reduce(function(s,d){ return s+dayRevenue(d); },0);
+    document.getElementById('monthRevenue').textContent=yen(total);
+  }
+  function renderSparkline(){
+    var svg=document.getElementById('sparkline');
+    var w=180,h=44,pad=3;
+    var max=Math.max.apply(null,revenueSeries.map(function(p){return p.total;}).concat([1]));
+    var n=revenueSeries.length||1;
+    var bw=(w-pad*2)/n*0.62;
+    var gap=(w-pad*2)/n;
+    var bars='';
+    revenueSeries.forEach(function(p,i){
+      var bh=Math.max(2,(p.total/max)*(h-pad*2));
+      var x=pad+i*gap+(gap-bw)/2;
+      var y=h-pad-bh;
+      var isToday = i===revenueSeries.length-1;
+      bars+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+bh.toFixed(1)+'" rx="2" fill="'+(isToday?'var(--accent)':'var(--accent-2)')+'" opacity="'+(isToday?'1':'0.55')+'"></rect>';
+    });
+    svg.innerHTML=bars;
+  }
+  function renderTodayStrip(){
+    var t=todayStr();
+    var todayIncome = incomeMonthDocs.filter(function(d){return d.date===t;})[0] || incomeDayDoc;
+    var todayRev = dayRevenue(todayIncome && todayIncome.date===t ? todayIncome : null);
+    var todayExpense = expenseMonthDocs.filter(function(e){return e.date===t;}).reduce(function(s,e){return s+(+e.amount||0);},0);
+    var openTasks = tasksCache.filter(function(x){return !x.done;}).length;
+    var wLabel='—', wSub='';
+    if(workoutLogToday){
+      if(workoutLogToday.effectiveKey==='rest'){ wLabel='休み'; }
+      else { wLabel=(workoutLogToday.manualOverride?'手動':(workoutLogToday.carried?'繰越':'通常'))+'・'+queueLabel(workoutLogToday.effectiveKey); }
+      var real=workoutLogToday.items||[];
+      var doneN=real.filter(function(i){return i.completed;}).length;
+      wSub = real.length ? (doneN+'/'+real.length+' 完了') : '休養日';
+    }
+    var html=''
+      +'<div class="stat-chip"><span class="stat-label">今日の売上</span><span class="stat-value mono">'+yen(todayRev)+'</span></div>'
+      +'<div class="stat-chip"><span class="stat-label">今日の支出</span><span class="stat-value mono">'+yen(todayExpense)+'</span></div>'
+      +'<div class="stat-chip"><span class="stat-label">筋トレ</span><span class="stat-value">'+esc(wLabel)+'</span><span class="stat-sub">'+esc(wSub)+'</span></div>'
+      +'<div class="stat-chip"><span class="stat-label">タスク残</span><span class="stat-value">'+openTasks+'件</span></div>';
+    document.getElementById('todayStrip').innerHTML=html;
+  }
+
+  /* ================= expenses ================= */
+  function populateCategorySelects(){
+    ['exCategory','rcCategory'].forEach(function(id){
+      var sel=document.getElementById(id);
+      sel.innerHTML = EXPENSE_CATEGORIES.map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
+    });
+  }
+  async function loadExpenseMonth(){
+    var r = monthRange(todayStr());
+    expenseMonthDocs = await collQueryRange('expenses','date',r.first,r.last,'desc');
+  }
+  async function addExpense(rec){
+    await collAdd('expenses', rec);
+    await loadExpenseMonth();
+    renderExpense(); renderTodayStrip();
+  }
+  async function deleteExpense(id){
+    await docDelete('expenses/'+id);
+    await loadExpenseMonth();
+    renderExpense(); renderTodayStrip();
+  }
+  function renderExpense(){
+    var total=expenseMonthDocs.reduce(function(s,e){return s+(+e.amount||0);},0);
+    document.getElementById('expenseMonthTotal').textContent=yen(total);
+    document.getElementById('expenseBudgetLabel').textContent='予算 '+yen(settings.expenseBudget)+' 中';
+    var pct=settings.expenseBudget>0 ? clamp((total/settings.expenseBudget)*100,0,100) : 0;
+    var fill=document.getElementById('expenseProgress');
+    fill.style.width=pct+'%';
+    fill.classList.toggle('over', total>settings.expenseBudget);
+
+    var byCat={};
+    expenseMonthDocs.forEach(function(e){ var c=e.category||'その他'; byCat[c]=(byCat[c]||0)+(+e.amount||0); });
+    var maxCat=Math.max.apply(null,Object.keys(byCat).map(function(k){return byCat[k];}).concat([1]));
+    var barsHtml = Object.keys(byCat).length ? Object.keys(byCat).sort(function(a,b){return byCat[b]-byCat[a];}).map(function(c){
+      var pctw=(byCat[c]/maxCat)*100;
+      return '<div class="bar-row"><span class="bar-label">'+esc(c)+'</span><div class="bar-track"><div class="bar-fill" style="width:'+pctw+'%;background:'+(CATEGORY_COLOR[c]||'var(--accent)')+';"></div></div><span class="bar-value mono">'+yen(byCat[c])+'</span></div>';
+    }).join('') : '<div class="empty-note">まだ記録がありません</div>';
+    document.getElementById('expenseCategoryBars').innerHTML=barsHtml;
+
+    document.getElementById('expenseList').innerHTML = expenseMonthDocs.length ? expenseMonthDocs.map(function(e){
+      return '<div class="row"><div class="row-main"><div class="row-title">'+esc(e.memo||e.category||'支出')+'</div>'
+        +'<div class="row-meta"><span class="chip '+(e.source==='ai'?'chip-accent':'chip-muted')+'">'+esc(e.category||'その他')+'</span><span>'+esc(e.date)+'</span>'+(e.source==='ai'?'<span>AI解析</span>':'')+'</div></div>'
+        +'<div class="mono" style="font-weight:700;">'+yen(e.amount)+'</div>'
+        +'<button class="btn btn-danger btn-sm" data-ex-del="'+e.id+'">削除</button></div>';
+    }).join('') : '<div class="empty-note">今月の記録はまだありません</div>';
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ex-del]'),function(el){
+      el.addEventListener('click',function(){ deleteExpense(el.getAttribute('data-ex-del')); });
+    });
+  }
+
+  function fileToBase64(file){
+    return new Promise(function(resolve,reject){
+      var reader=new FileReader();
+      reader.onload=function(){
+        var result=reader.result||''; // data:image/jpeg;base64,xxxx
+        var idx=result.indexOf(',');
+        resolve(idx>=0?result.slice(idx+1):result);
+      };
+      reader.onerror=function(){ reject(new Error('画像の読み込みに失敗しました')); };
+      reader.readAsDataURL(file);
+    });
+  }
+  async function analyzeReceipt(file){
+    if(!backendReady){ toast('保存先が未接続のため、AI解析は利用できません'); return; }
+    var statusEl=document.getElementById('receiptStatus');
+    var preview=document.getElementById('receiptPreview');
+    preview.src=URL.createObjectURL(file); preview.hidden=false;
+    statusEl.textContent='解析中…';
+    document.getElementById('receiptConfirm').hidden=true;
+    try{
+      var base64 = await fileToBase64(file);
+      var data = await callBackend('analyzeReceipt', { imageBase64:base64, mimeType:(file.type||'image/jpeg') });
+      var amount = Math.max(0, Math.round(Number(data && data.amount) || 0));
+      var dateVal = (data && /^\d{4}-\d{2}-\d{2}$/.test(data.date)) ? data.date : todayStr();
+      var cat = (data && EXPENSE_CATEGORIES.indexOf(data.category)>=0) ? data.category : 'その他';
+      pendingReceipt = { store:(data&&data.store)?String(data.store):'不明', amount:amount, date:dateVal, category:cat };
+      statusEl.textContent='解析できました。内容を確認して記帳してください。';
+      document.getElementById('rcStore').value=pendingReceipt.store;
+      document.getElementById('rcAmount').value=pendingReceipt.amount;
+      document.getElementById('rcDate').value=pendingReceipt.date;
+      document.getElementById('rcCategory').value=pendingReceipt.category;
+      document.getElementById('receiptConfirm').hidden=false;
+    }catch(e){
+      statusEl.textContent = (e && e.message) ? e.message : '解析中にエラーが発生しました';
+    }
+  }
+
+  /* ================= workout ================= */
+  // その日のログが「完了」扱いかどうか。完了なら翌日はキューが1つ進み、
+  // 未完了（または手動で「休み」に変更した実トレ日）なら同じ枠が翌日にスライドする。
+  function wasLogCompleted(log){
+    if(!log) return true; // 記録なし＝自己修復のため進める
+    var isRestToday = log.effectiveKey==='rest';
+    if(isRestToday){
+      // 元々「休み」の枠なら通常どおり完了扱い。実トレ日を手動で休みに変更した場合は未完了扱い（スライド）。
+      return !(log.manualOverride && log.assignedKey!=='rest');
+    }
+    var items=log.items||[];
+    if(!items.length) return false;
+    return items.every(function(i){return i.completed;});
+  }
+  // 以前のバージョン（曜日固定メニュー時代）に作成された古い形式の記録を誤って
+  // そのまま使うと描画時にエラーになるため、新しい形式かどうかを確認する。
+  function isValidWorkoutLog(log){
+    if(!log || typeof log.effectiveKey!=='string' || typeof log.queueIndex!=='number') return false;
+    if(!Array.isArray(log.items)) return false;
+    for(var i=0;i<log.items.length;i++){ if(!Array.isArray(log.items[i].log)) return false; }
+    return true;
+  }
+  async function ensureTodayWorkout(){
+    var t=todayStr();
+    var existing = await docGet('workoutLog/'+t);
+    if(existing && isValidWorkoutLog(existing)){ workoutLogToday=existing; return; }
+
+    var y=toDateStr(addDays(todayDate(),-1));
+    var yLog=await docGet('workoutLog/'+y);
+    if(yLog && !isValidWorkoutLog(yLog)) yLog=null;
+    var newIndex, carried;
+    if(!yLog){
+      newIndex=0; carried=false; // 記録が全く無い（初回 or 長期間の空白）→キューの先頭から再開
+    } else if(wasLogCompleted(yLog)){
+      newIndex=(yLog.queueIndex+1)%QUEUE.length; carried=false;
+    } else {
+      newIndex=yLog.queueIndex; carried=true;
+    }
+    var assignedKey=QUEUE[newIndex].key;
+    var log={ date:t, queueIndex:newIndex, assignedKey:assignedKey, effectiveKey:assignedKey, manualOverride:false, carried:carried, items:buildItemsFor(assignedKey) };
+    await docSet('workoutLog/'+t, log);
+    workoutLogToday=log;
+  }
+  async function setWorkoutOverride(newKey){
+    if(!workoutLogToday) return;
+    workoutLogToday = Object.assign({}, workoutLogToday, {
+      effectiveKey:newKey,
+      manualOverride:(newKey!==workoutLogToday.assignedKey),
+      items: buildItemsFor(newKey)
+    });
+    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
+    toast(newKey==='rest' ? '本日を休みに変更しました。元のメニューは翌日以降に繰り越されます。' : 'メニューを変更しました');
+    renderWorkout(); renderTodayStrip();
+  }
+  async function toggleWorkoutDone(idx,val){
+    workoutLogToday.items[idx].completed=val;
+    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
+    renderWorkout(); renderTodayStrip();
+  }
+  async function updateWorkoutSet(idx,setIdx,field,val){
+    workoutLogToday.items[idx].log[setIdx][field]= val===''? null : +val;
+    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
+  }
+  async function addWorkoutSet(idx){
+    workoutLogToday.items[idx].log.push({kg:null,reps:null});
+    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
+    renderWorkout();
+  }
+  async function removeWorkoutSet(idx,setIdx){
+    workoutLogToday.items[idx].log.splice(setIdx,1);
+    if(!workoutLogToday.items[idx].log.length) workoutLogToday.items[idx].log.push({kg:null,reps:null});
+    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
+    renderWorkout();
+  }
+  function populateWorkoutSelect(){
+    var sel=document.getElementById('workoutMenuSelect');
+    sel.innerHTML=QUEUE.map(function(q){ return '<option value="'+q.key+'">'+esc(q.label)+'</option>'; }).join('');
+  }
+  function renderWorkout(){
+    if(!workoutLogToday) return;
+    var titleEl=document.getElementById('workoutTitle');
+    var chipEl=document.getElementById('workoutStatusChip');
+    var subEl=document.getElementById('workoutSub');
+    document.getElementById('workoutMenuSelect').value=workoutLogToday.effectiveKey;
+
+    if(workoutLogToday.effectiveKey==='rest'){
+      titleEl.textContent = workoutLogToday.manualOverride ? '本日は休み（手動変更）' : '本日は休養日';
+      chipEl.textContent='休み'; chipEl.className='chip chip-muted';
+      subEl.textContent = workoutLogToday.manualOverride
+        ? '本来の「'+queueLabel(workoutLogToday.assignedKey)+'」は翌日以降にスライドします。'
+        : 'ローテーション上の休養日です。';
+    } else {
+      titleEl.textContent = queueLabel(workoutLogToday.effectiveKey);
+      if(workoutLogToday.manualOverride){ chipEl.textContent='手動変更'; chipEl.className='chip chip-accent'; }
+      else if(workoutLogToday.carried){ chipEl.textContent='繰り越し'; chipEl.className='chip chip-accent'; }
+      else { chipEl.textContent='通常メニュー'; chipEl.className='chip chip-success'; }
+      subEl.textContent = workoutLogToday.manualOverride ? '手動でメニューを変更しました。'
+        : workoutLogToday.carried ? '前日にやり残しがあったため、同じメニューを本日に繰り越しています。'
+        : 'ローテーション通りの本日のメニューです。';
+    }
+
+    var seqHtml = QUEUE.map(function(q,i){
+      var isCur = workoutLogToday.queueIndex===i;
+      return '<div class="seq-node'+(isCur?' current':'')+(q.key==='rest'?' rest-node':'')+'">'+esc(q.label)+'</div>';
+    }).join('');
+    document.getElementById('seqStrip').innerHTML=seqHtml;
+
+    var items=workoutLogToday.items||[];
+    var doneN=items.filter(function(i){return i.completed;}).length;
+    document.getElementById('workoutProgressChip').textContent=(items.length? doneN+'/'+items.length : '休み');
+
+    if(!items.length){
+      document.getElementById('workoutList').innerHTML='<div class="empty-note">今日は種目がありません。ゆっくり休んでください。</div>';
+      return;
+    }
+    document.getElementById('workoutList').innerHTML = items.map(function(it,idx){
+      var setsHtml = it.log.map(function(s,si){
+        return '<div class="set-row">'
+          +'<span class="set-idx">'+(si+1)+'</span>'
+          +'<input class="input mono" type="number" step="any" placeholder="kg" data-set-field="kg" data-set-idx="'+idx+'" data-set-si="'+si+'" value="'+(s.kg==null?'':s.kg)+'">'
+          +'<span class="set-x">×</span>'
+          +'<input class="input mono" type="number" step="any" placeholder="reps" data-set-field="reps" data-set-idx="'+idx+'" data-set-si="'+si+'" value="'+(s.reps==null?'':s.reps)+'">'
+          +'<button type="button" class="set-remove" data-set-remove="'+idx+'" data-set-remove-si="'+si+'" aria-label="このセットを削除">×</button>'
+          +'</div>';
+      }).join('');
+      return '<div class="ex-card">'
+        +'<div class="ex-head">'
+        +'<div class="checkbox'+(it.completed?' checked':'')+'" data-wo-check="'+idx+'" data-done="'+(it.completed?'1':'0')+'">'+(it.completed?'✓':'')+'</div>'
+        +'<div class="row-main">'
+        +'<div class="ex-name'+(it.completed?' done':'')+'">'+esc(it.name)+'</div>'
+        +'<div class="ex-target">'
+        +'<span>目安 '+it.sets+'×'+it.repLow+'-'+it.repHigh+'</span>'
+        +'<span>RIR '+esc(it.rir)+'</span>'
+        +'<span>テンポ '+esc(it.tempo)+'</span>'
+        +'<span>休憩'+it.restSec+'s</span>'
+        +'</div></div></div>'
+        +'<div class="set-table">'+setsHtml+'</div>'
+        +'<button type="button" class="btn btn-sm set-add-btn" data-set-add="'+idx+'">+ セット追加</button>'
+        +'</div>';
+    }).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('[data-wo-check]'),function(el){
+      el.addEventListener('click',function(){ toggleWorkoutDone(+el.getAttribute('data-wo-check'), el.getAttribute('data-done')!=='1'); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-set-field]'),function(el){
+      el.addEventListener('change',function(){
+        updateWorkoutSet(+el.getAttribute('data-set-idx'), +el.getAttribute('data-set-si'), el.getAttribute('data-set-field'), el.value);
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-set-add]'),function(el){
+      el.addEventListener('click',function(){ addWorkoutSet(+el.getAttribute('data-set-add')); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-set-remove]'),function(el){
+      el.addEventListener('click',function(){ removeWorkoutSet(+el.getAttribute('data-set-remove'), +el.getAttribute('data-set-remove-si')); });
+    });
+  }
+
+  /* ================= tabs / modal / wiring ================= */
+  function switchTab(name){
+    currentTab=name;
+    Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'),function(b){
+      var on=b.getAttribute('data-tab')===name;
+      b.classList.toggle('active',on); b.setAttribute('aria-selected',on?'true':'false');
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.panel'),function(p){
+      p.classList.toggle('active', p.id==='panel-'+name);
+    });
+  }
+
+  function wireStaticUI(){
+    Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'),function(b){
+      b.addEventListener('click',function(){ switchTab(b.getAttribute('data-tab')); });
+    });
+
+    populateWorkoutSelect();
+    document.getElementById('workoutMenuSelect').addEventListener('change',function(){ setWorkoutOverride(this.value); });
+
+    document.getElementById('taskAddBtn').addEventListener('click',addTask);
+    document.getElementById('taskInput').addEventListener('keydown',function(e){
+      if(e.key==='Enter' && !e.isComposing && e.keyCode!==229) addTask();
+    });
+
+    document.getElementById('incomeDate').addEventListener('change',async function(){
+      await loadIncomeDay(this.value); fillIncomeForm();
+    });
+    ['demaeAmAmount','demaePmAmount','videoCount'].forEach(function(id){
+      document.getElementById(id).addEventListener('input',updateIncomeLiveTotals);
+    });
+    document.getElementById('gopalToggle').addEventListener('click',function(e){
+      var btn=e.target.closest('button'); if(!btn) return;
+      gopalWorked = btn.getAttribute('data-val')==='true';
+      renderGopalToggle(); updateIncomeLiveTotals();
+    });
+    document.getElementById('incomeSaveBtn').addEventListener('click',saveIncomeDay);
+
+    document.getElementById('exAddBtn').addEventListener('click',async function(){
+      var amount=+document.getElementById('exAmount').value;
+      if(!amount || amount<=0){ toast('金額を入力してください'); return; }
+      var rec={ date:document.getElementById('exDate').value||todayStr(), amount:amount, category:document.getElementById('exCategory').value, memo:document.getElementById('exMemo').value.trim(), source:'manual', createdAt:Date.now() };
+      await addExpense(rec);
+      document.getElementById('exAmount').value=''; document.getElementById('exMemo').value='';
+      toast('記帳しました');
+    });
+
+    document.getElementById('receiptPickBtn').addEventListener('click',function(){ document.getElementById('receiptFile').click(); });
+    document.getElementById('receiptFile').addEventListener('change',function(){
+      if(this.files && this.files[0]) analyzeReceipt(this.files[0]);
+    });
+    document.getElementById('rcSaveBtn').addEventListener('click',async function(){
+      var rec={
+        date:document.getElementById('rcDate').value||todayStr(),
+        amount:+document.getElementById('rcAmount').value||0,
+        category:document.getElementById('rcCategory').value,
+        memo:document.getElementById('rcStore').value.trim(),
+        source:'ai', createdAt:Date.now()
+      };
+      if(rec.amount<=0){ toast('金額を確認してください'); return; }
+      await addExpense(rec);
+      pendingReceipt=null;
+      document.getElementById('receiptConfirm').hidden=true;
+      document.getElementById('receiptPreview').hidden=true;
+      document.getElementById('receiptStatus').textContent='記帳しました。続けて撮影できます。';
+      document.getElementById('receiptFile').value='';
+      toast('家計簿に記帳しました');
+    });
+    document.getElementById('rcDiscardBtn').addEventListener('click',function(){
+      pendingReceipt=null;
+      document.getElementById('receiptConfirm').hidden=true;
+      document.getElementById('receiptPreview').hidden=true;
+      document.getElementById('receiptStatus').textContent='';
+      document.getElementById('receiptFile').value='';
+    });
+
+    document.getElementById('settingsBtn').addEventListener('click',function(){
+      document.getElementById('setVideoPrice').value=settings.videoUnitPrice;
+      document.getElementById('setGopalFixed').value=settings.gopalFixed;
+      document.getElementById('setExpenseBudget').value=settings.expenseBudget;
+      document.getElementById('setWebappUrl').value=WEBAPP_URL;
+      document.getElementById('setWebappStatus').textContent='';
+      document.getElementById('settingsModal').hidden=false;
+    });
+    document.getElementById('setCloseBtn').addEventListener('click',function(){ document.getElementById('settingsModal').hidden=true; });
+    document.getElementById('settingsModal').addEventListener('click',function(e){ if(e.target===this) this.hidden=true; });
+    document.getElementById('setSaveBtn').addEventListener('click',async function(){
+      await saveSettings({
+        videoUnitPrice:+document.getElementById('setVideoPrice').value||0,
+        gopalFixed:+document.getElementById('setGopalFixed').value||0,
+        expenseBudget:+document.getElementById('setExpenseBudget').value||0
+      });
+      document.getElementById('settingsModal').hidden=true;
+      updateIncomeLiveTotals(); renderHero(); renderExpense(); renderTodayStrip();
+      toast('設定を保存しました');
+    });
+    document.getElementById('setWebappTestBtn').addEventListener('click',async function(){
+      var url=document.getElementById('setWebappUrl').value.trim();
+      var statusEl=document.getElementById('setWebappStatus');
+      if(!url){ statusEl.textContent='URLを入力してください'; return; }
+      statusEl.textContent='接続を確認しています…';
+      var prevUrl=WEBAPP_URL;
+      WEBAPP_URL=url;
+      var ok=await testBackendConnection(true);
+      if(!ok){
+        statusEl.textContent='接続できませんでした。URLを確認してください';
+        WEBAPP_URL=prevUrl;
+        return;
+      }
+      localStorage.setItem('gl_webapp_url', url);
+      statusEl.textContent='接続できました。データを再読み込みします…';
+      toast('保存先を変更しました');
+      await loadSettings();
+      var loadResults = await Promise.allSettled([ loadTasks(), loadIncomeDay(document.getElementById('incomeDate').value||todayStr()), loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth(), ensureTodayWorkout() ]);
+      loadResults.forEach(function(r){ if(r.status==='rejected') console.error('reload failed',r.reason); });
+      renderAll();
+      statusEl.textContent='接続できました';
+    });
+
+    document.getElementById('setupSaveBtn').addEventListener('click',async function(){
+      var url=document.getElementById('setupUrlInput').value.trim();
+      var statusEl=document.getElementById('setupStatus');
+      if(!url){ statusEl.textContent='URLを入力してください'; return; }
+      statusEl.textContent='接続を確認しています…';
+      WEBAPP_URL=url;
+      var ok=await testBackendConnection(true);
+      if(!ok){
+        statusEl.textContent='接続できませんでした。URLを確認してください';
+        WEBAPP_URL=localStorage.getItem('gl_webapp_url')||'';
+        return;
+      }
+      localStorage.setItem('gl_webapp_url', url);
+      document.getElementById('setupModal').hidden=true;
+      statusEl.textContent='';
+      toast('接続しました');
+
+      await loadSettings();
+      document.getElementById('incomeDate').value = todayStr();
+      document.getElementById('exDate').value = todayStr();
+      var loadResults = await Promise.allSettled([ loadTasks(), loadIncomeDay(todayStr()), loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth(), ensureTodayWorkout() ]);
+      loadResults.forEach(function(r){ if(r.status==='rejected') console.error('initial load failed',r.reason); });
+      renderAll();
+    });
+  }
+
+  function safeRun(name,fn){
+    try{ fn(); }catch(e){ console.error('render failed:',name,e); }
+  }
+  function renderAll(){
+    safeRun('fillIncomeForm',fillIncomeForm);
+    safeRun('renderTasks',renderTasks);
+    safeRun('renderIncomeMonthList',renderIncomeMonthList);
+    safeRun('renderHero',renderHero);
+    safeRun('renderSparkline',renderSparkline);
+    safeRun('renderExpense',renderExpense);
+    safeRun('renderWorkout',renderWorkout);
+    safeRun('renderTodayStrip',renderTodayStrip);
+  }
+
+  boot().catch(function(e){ console.error('boot failed',e); toast('読み込み中にエラーが発生しました。再読み込みしてください'); });
+})();
+</script>
+</body>
+</html>

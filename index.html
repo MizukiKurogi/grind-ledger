@@ -348,6 +348,12 @@
 
   <section class="today-strip" id="todayStrip" aria-label="今日のサマリー"></section>
 
+  <!-- Phase 1：読み込みに失敗したデータがあるときだけ表示 -->
+  <div class="card" id="statusBanner" hidden style="border-color:var(--danger);display:flex;flex-direction:column;gap:8px;">
+    <div id="statusBannerText" style="font-size:13px;line-height:1.6;color:var(--danger);font-weight:700;"></div>
+    <button class="btn btn-sm" id="statusRetryBtn" type="button" hidden style="align-self:flex-start;">再読み込み</button>
+  </div>
+
   <nav class="tabs" role="tablist" aria-label="セクション">
     <button class="tab-btn active" data-tab="tasks" role="tab" aria-selected="true">タスク</button>
     <button class="tab-btn" data-tab="income" role="tab" aria-selected="false">収入</button>
@@ -513,6 +519,12 @@
           <span class="chip" id="workoutStatusChip"></span>
         </div>
         <div class="card-sub" id="workoutSub"></div>
+        <!-- Phase 1：読み込み失敗時の再読み込み／保存失敗時の再保存 -->
+        <button class="btn btn-sm" id="workoutReloadBtn" type="button" hidden style="margin-top:10px;">再読み込み</button>
+        <div id="workoutSaveStatus" hidden style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:12.5px;font-weight:700;color:var(--danger);">⚠ 保存できていない変更があります</span>
+          <button class="btn btn-sm" id="workoutSaveRetryBtn" type="button">再保存</button>
+        </div>
         <div class="field" style="margin-top:12px;max-width:280px;">
           <label>今日のメニューを変更</label>
           <select class="input" id="workoutMenuSelect"></select>
@@ -555,6 +567,7 @@
       <div id="setWebappStatus" style="font-size:12px;color:var(--muted);margin-top:6px;min-height:16px;"></div>
       <button class="btn btn-sm" id="setWebappTestBtn" style="margin-top:6px;" type="button">接続テスト＆保存</button>
     </div>
+    <div id="setVersionInfo" style="font-size:11px;color:var(--ink-faint);margin-bottom:10px;"></div>
     <div class="modal-actions">
       <button class="btn btn-primary" id="setSaveBtn" style="flex:1;">保存</button>
       <button class="btn" id="setCloseBtn">閉じる</button>
@@ -677,16 +690,27 @@
   var EXPENSE_CATEGORIES = ['食費','日用品','交通','娯楽','衣服・美容','交際費','その他'];
   var CATEGORY_COLOR = {'食費':'var(--accent)','日用品':'var(--accent-2)','交通':'var(--success)','娯楽':'#8a6fd8','衣服・美容':'#d1699a','交際費':'#4a90d9','その他':'var(--ink-faint)'};
 
+  /* ================= version ================= */
+  // 反映確認用。設定画面の下に表示されます。
+  var APP_VERSION = '2026-09-30-phase1-index';
+
   /* ================= helpers ================= */
+  // K. 日付はすべて日本時間（Asia/Tokyo）で扱う。
+  // 日本には夏時間がないため、現在時刻に9時間を足した Date を getUTC〇〇() で読むと、
+  // 端末のタイムゾーン設定に関係なく、日本時間の年月日・時刻になる。
+  var APP_TZ_OFFSET_MS = 9 * 60 * 60 * 1000;
   function pad2(n){ return String(n).padStart(2,'0'); }
-  function toDateStr(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
-  function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
-  function todayDate(){ return new Date(); }
-  function todayStr(){ return toDateStr(todayDate()); }
+  function tokyoNow(){ return new Date(Date.now() + APP_TZ_OFFSET_MS); } // ※ getUTC〇〇() で読むこと
+  function utcDateToStr(d){ return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate()); }
+  function todayStr(){ return utcDateToStr(tokyoNow()); }
+  function isDateStr(s){ return typeof s==='string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+  function parseDateStr(s){ return new Date(Date.UTC(+s.slice(0,4), +s.slice(5,7)-1, +s.slice(8,10))); }
+  function addDaysStr(s,n){ var d=parseDateStr(s); d.setUTCDate(d.getUTCDate()+n); return utcDateToStr(d); }
+  function weekdayOf(s){ return isDateStr(s) ? WEEKDAY_JP[parseDateStr(s).getUTCDay()] : ''; }
   function monthRange(dateStr){
     var y=+dateStr.slice(0,4), m=+dateStr.slice(5,7);
     var first=y+'-'+pad2(m)+'-01';
-    var lastDay=new Date(y,m,0).getDate();
+    var lastDay=new Date(Date.UTC(y,m,0)).getUTCDate();
     var last=y+'-'+pad2(m)+'-'+pad2(lastDay);
     return {first:first,last:last};
   }
@@ -696,154 +720,305 @@
   function clamp(n,a,b){ return Math.max(a,Math.min(b,n)); }
   // db から返るドキュメントは凍結されている場合があるため、後から編集できるよう複製してから使う。
   function clone(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
+  function errMsg(e){ return (e && e.message) ? e.message : String(e); }
 
-  function toast(msg){
+  // I. 新規登録用のID（UUID）をブラウザ側で作る
+  function newId(){
+    if(window.crypto && typeof window.crypto.randomUUID==='function') return window.crypto.randomUUID();
+    var b=new Uint8Array(16); window.crypto.getRandomValues(b);
+    b[6]=(b[6]&0x0f)|0x40; b[8]=(b[8]&0x3f)|0x80;
+    var h=Array.prototype.map.call(b,function(x){ return (x+256).toString(16).slice(1); }).join('');
+    return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
+  }
+
+  function toast(msg,isError){
     var el=document.getElementById('toast');
     el.textContent=msg; el.hidden=false;
     clearTimeout(toast._t);
-    toast._t=setTimeout(function(){ el.hidden=true; },3200);
+    toast._t=setTimeout(function(){ el.hidden=true; }, isError ? 6000 : 3200);
+  }
+
+  /* ================= H. 二重押下の防止 ================= */
+  // 保存・通信中の処理の数。0より大きい間にページを閉じようとすると警告する。
+  var busyCount=0;
+  // ボタンを押した瞬間に押せなくし、「保存中...」などに変え、終わったら元に戻す。
+  // 処理中にもう一度押されても（Enterキーを含む）何もしない。
+  async function withBusy(btn,busyLabel,fn){
+    if(btn && btn.dataset.busy==='1') return;
+    var orig = btn ? btn.textContent : '';
+    if(btn){ btn.dataset.busy='1'; btn.disabled=true; btn.textContent=busyLabel; }
+    busyCount++;
+    try{ return await fn(); }
+    finally{
+      busyCount--;
+      if(btn){ btn.dataset.busy=''; btn.disabled=false; btn.textContent=orig; }
+    }
+  }
+  // チェックボックスや削除ボタンなど、1件ごとの操作の二重実行を防ぐ
+  var busyKeys={};
+  async function withKeyBusy(key,fn){
+    if(busyKeys[key]) return;
+    busyKeys[key]=true; busyCount++;
+    try{ return await fn(); }
+    finally{ delete busyKeys[key]; busyCount--; }
   }
 
   /* ================= state ================= */
-  // このバージョン（GitHub / 自前ホスティング版）は、Claudeのdb/sample機能の代わりに
-  // Google Apps Script 経由で Google スプレッドシートへ保存し、
-  // レシート画像のAI解析も同じApps Script経由（Gemini API）で行う。
+  // このバージョン（GitHub / 自前ホスティング版）は、Google Apps Script 経由で
+  // Google スプレッドシートへ保存し、レシート画像のAI解析も同じApps Script経由（Gemini API）で行う。
+  // 保存先の Web App URL は設定画面から入力し、この端末（ブラウザ）の localStorage に保存する。
   var WEBAPP_URL = localStorage.getItem('gl_webapp_url') || '';
   var backendReady = false;
+  var backendVersion = null; // 接続先の Code.gs のバージョン（旧環境は null）
 
-  var settings={ videoUnitPrice:2000, gopalFixed:15000, expenseBudget:30000 };
+  var DEFAULT_SETTINGS = { videoUnitPrice:2000, gopalFixed:15000, expenseBudget:30000 };
+  var settings = Object.assign({}, DEFAULT_SETTINGS);
+  var settingsLoaded = false; // 設定を読み込めていない間は、設定の保存をさせない（初期値で上書きしないため）
   var tasksCache=[];
   var incomeMonthDocs=[]; // {date,...} for current month
-  var incomeDayDoc=null;  // currently edited day
   var expenseMonthDocs=[]; // {id,date,amount,category,memo,...}
   var revenueSeries=[]; // last 7 days [{date,total}]
+
+  // 収入フォームの状態
+  //   incomeState: 'idle' | 'loading'（読み込み中） | 'ok'（読み込み成功） | 'error'（読み込み失敗）
+  //   'ok' のときだけ保存できる（読み込み失敗を「データなし」と誤解して、空で上書きしないため）
+  var incomeDayDoc=null;
+  var incomeState='idle';
+  var incomeLoadedDate=null;
+  var incomeLoadSeq=0;
+  var incomeSaving=false;
+  var incomeDirty=false; // 保存していない入力があるか
+
+  // 筋トレの状態：'loading' | 'ok' | 'error'
   var workoutLogToday=null; // {date,queueIndex,assignedKey,effectiveKey,manualOverride,carried,items:[...]}
+  var workoutState='loading';
+
   var gopalWorked=false;
   var currentTab='tasks';
   var pendingReceipt=null;
+
+  // 読み込みに失敗したデータの名前（画面上部に表示する）
+  var loadErrors={};
+
+  // I. 入力中の新規登録に付けるID。送信に失敗して再送しても同じIDを使うので二重登録されない。
+  //    入力内容を変えた場合だけ新しいIDにする。
+  var drafts={ task:null, expense:null, receipt:null };
+  function draftFor(kind, content){
+    var sig=JSON.stringify(content);
+    var d=drafts[kind];
+    if(!d || d.sig!==sig){ d = drafts[kind] = { id:newId(), sig:sig, createdAt:Date.now() }; }
+    return d;
+  }
+
+  function resetDataState(){
+    settings = Object.assign({}, DEFAULT_SETTINGS); settingsLoaded=false;
+    tasksCache=[]; incomeMonthDocs=[]; expenseMonthDocs=[]; revenueSeries=[];
+    incomeDayDoc=null; incomeState='idle'; incomeLoadedDate=null; incomeLoadSeq++; incomeDirty=false;
+    workoutLogToday=null; workoutState='loading';
+    woSave.dirty=false; woSave.failed=false;
+    drafts={ task:null, expense:null, receipt:null };
+    pendingReceipt=null;
+    loadErrors={};
+    document.getElementById('receiptConfirm').hidden=true;
+    document.getElementById('receiptPreview').hidden=true;
+    document.getElementById('receiptStatus').textContent='';
+    document.getElementById('incomeDate').value = todayStr();
+    document.getElementById('exDate').value = todayStr();
+  }
+
+  /* ================= F/G. 通信（Google Sheets 経由） ================= */
+  var SHEET_OF = { tasks:'Tasks', income:'Income', expenses:'Expenses', workoutLog:'WorkoutLog', settings:'Settings' };
+  var REQUEST_TIMEOUT_MS = 30000;
+  var RECEIPT_TIMEOUT_MS = 90000;
+
+  // 通信に失敗したら必ずエラー（例外）にする。「データなし」とは絶対に区別する。
+  async function postJson(url, action, payload, timeoutMs){
+    if(!url) throw new Error('保存先(Web App URL)が未設定です');
+    var ctrl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, timeoutMs || REQUEST_TIMEOUT_MS) : null;
+    try{
+      var res;
+      try{
+        res = await fetch(url, {
+          method:'POST',
+          headers:{ 'Content-Type':'text/plain;charset=utf-8' }, // CORSのプリフライトを避けるため text/plain で送る
+          body: JSON.stringify(Object.assign({action:action}, payload||{})),
+          signal: ctrl ? ctrl.signal : undefined
+        });
+      }catch(e){
+        if(e && e.name==='AbortError') throw new Error('通信がタイムアウトしました');
+        throw new Error('通信できませんでした（電波・ネット接続を確認してください）');
+      }
+      if(!res.ok) throw new Error('サーバーエラー（HTTP '+res.status+'）');
+      var json;
+      try{ json = await res.json(); }
+      catch(e){ throw new Error('サーバーの応答を読み取れませんでした'); }
+      if(!json || json.ok!==true) throw new Error((json && json.error) || 'バックエンドエラー');
+      return json.result;
+    }finally{
+      if(timer) clearTimeout(timer);
+    }
+  }
+  function callBackend(action,payload,timeoutMs){ return postJson(WEBAPP_URL, action, payload, timeoutMs); }
+
+  function splitPath(path){
+    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
+    if(!sheet) throw new Error('未定義の保存先です: '+parts[0]);
+    return { sheet:sheet, id:parts[1] };
+  }
+  // 見つからなければ null。通信失敗は null ではなくエラーになる。
+  async function docGet(path){
+    var p=splitPath(path);
+    var r = await callBackend('docGet',{sheet:p.sheet, id:p.id});
+    return r==null ? null : clone(r);
+  }
+  // 以下の保存系は、失敗したら必ずエラーになる（呼び出し側で成功・失敗を表示する）
+  async function docSet(path,data){
+    var p=splitPath(path);
+    await callBackend('docSet',{sheet:p.sheet, id:p.id, data:data});
+  }
+  async function docUpdate(path,data){
+    var p=splitPath(path);
+    await callBackend('docUpdate',{sheet:p.sheet, id:p.id, data:data});
+  }
+  async function docDelete(path){
+    var p=splitPath(path);
+    await callBackend('docDelete',{sheet:p.sheet, id:p.id});
+  }
+  // data.id を付けて送る。同じIDの再送はサーバー側で追加されない（二重登録防止）
+  async function collAdd(name,data){
+    if(!data || !data.id) throw new Error('IDがありません');
+    var r = await callBackend('collAdd',{sheet:SHEET_OF[name], data:data});
+    if(!r || !r.id) throw new Error('保存結果を確認できませんでした');
+    return r;
+  }
+  async function collQueryRange(name,field,ge,le,orderDir){
+    var out = clone(await callBackend('collQueryRange',{sheet:SHEET_OF[name], field:field, ge:ge, le:le})) || [];
+    out.sort(function(a,b){ return orderDir==='desc' ? (a[field]<b[field]?1:-1) : (a[field]>b[field]?1:-1); });
+    return out;
+  }
+  async function collAll(name){
+    var out = clone(await callBackend('collList',{sheet:SHEET_OF[name]})) || [];
+    out.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+    return out;
+  }
+
+  /* ================= 読み込みの管理 ================= */
+  var LOAD_LABEL = { settings:'設定', tasks:'タスク', incomeDay:'収入（記入日）', incomeMonth:'今月の収入', revenue:'売上グラフ', expenses:'支出', workout:'筋トレ' };
+  var LOADERS = {
+    settings: function(){ return loadSettings(); },
+    tasks: function(){ return loadTasks(); },
+    incomeDay: function(){ return loadIncomeDay(document.getElementById('incomeDate').value); },
+    incomeMonth: function(){ return loadIncomeMonth(); },
+    revenue: function(){ return loadRevenueSeries(); },
+    expenses: function(){ return loadExpenseMonth(); },
+    workout: function(){ return loadWorkout(); }
+  };
+  // 指定したデータを読み込み、失敗したものを loadErrors に記録する。
+  // 失敗しても、前に読み込めていた表示はそのまま残す（空で置き換えない）。
+  async function runLoads(names){
+    var results = await Promise.allSettled(names.map(function(n){ return LOADERS[n](); }));
+    results.forEach(function(r,i){
+      if(r.status==='rejected'){ loadErrors[names[i]]=true; console.error('load failed:',names[i],r.reason); }
+      else { delete loadErrors[names[i]]; }
+    });
+    renderStatusBanner();
+    return results.every(function(r){ return r.status==='fulfilled'; });
+  }
+  async function loadEverything(){
+    // 設定（単価など）を先に読んでから、ほかを並行して読む
+    await runLoads(['settings']);
+    await runLoads(['tasks','incomeDay','incomeMonth','revenue','expenses','workout']);
+    renderAll();
+  }
+  function renderStatusBanner(){
+    var banner=document.getElementById('statusBanner');
+    var textEl=document.getElementById('statusBannerText');
+    var retryBtn=document.getElementById('statusRetryBtn');
+    var lines=[];
+    var failed=Object.keys(loadErrors);
+    if(failed.length){
+      lines.push('⚠ 読み込めなかったデータがあります：'+failed.map(function(n){ return LOAD_LABEL[n]||n; }).join('・'));
+      lines.push('表示が0や空でも、記録が消えたわけではありません。通信状態を確認して「再読み込み」を押してください。');
+    }
+    if(backendReady && !backendVersion){
+      lines.push('⚠ 旧バージョンの保存先に接続しています。重複防止が効きません。設定から本番の保存先URLに切り替えてください。');
+    }
+    textEl.innerHTML = lines.map(esc).join('<br>');
+    banner.hidden = lines.length===0;
+    retryBtn.hidden = failed.length===0;
+  }
+  async function retryFailedLoads(){
+    var failed=Object.keys(loadErrors);
+    if(!failed.length) return;
+    if(loadErrors.settings) await runLoads(['settings']);
+    var rest=failed.filter(function(n){ return n!=='settings'; });
+    if(rest.length) await runLoads(rest);
+    renderAll();
+    if(Object.keys(loadErrors).length) toast('まだ読み込めないデータがあります。少し待ってから再度お試しください',true);
+    else toast('読み込みました');
+  }
 
   /* ================= boot ================= */
   async function boot(){
     populateCategorySelects();
     wireStaticUI();
     startClock();
+    document.getElementById('incomeDate').value = todayStr();
+    document.getElementById('exDate').value = todayStr();
+    renderIncomeSaveBtn();
+    renderWorkout();
 
     if(!WEBAPP_URL){
-      showSetupModal();
+      showSetupModal('');
       return; // Web App URLが未設定の間はデータ読み込みを行わない
     }
 
-    var pingOk = await testBackendConnection(true);
-    if(!pingOk){ showSetupModal(); return; }
-
-    await loadSettings();
-    document.getElementById('incomeDate').value = todayStr();
-    document.getElementById('exDate').value = todayStr();
-
-    var loadResults = await Promise.allSettled([ loadTasks(), loadIncomeDay(todayStr()), loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth(), ensureTodayWorkout() ]);
-    loadResults.forEach(function(r){ if(r.status==='rejected') console.error('initial load failed',r.reason); });
-    renderAll();
-  }
-
-  function showSetupModal(){
-    document.getElementById('setupModal').hidden=false;
-    document.getElementById('setupUrlInput').value=WEBAPP_URL;
-  }
-  async function testBackendConnection(silent){
-    if(!WEBAPP_URL) return false;
     try{
-      var r = await callBackend('ping',{});
+      var r = await postJson(WEBAPP_URL,'ping',{});
       backendReady = !!(r && r.pong);
-      return backendReady;
+      backendVersion = (r && r.version) || null;
     }catch(e){
       backendReady=false;
-      if(!silent) toast('接続できませんでした：'+e.message);
-      return false;
     }
+    if(!backendReady){
+      showSetupModal('前回の保存先に接続できませんでした。電波を確認して「保存して接続」を押してください。');
+      return;
+    }
+    await loadEverything();
   }
 
-  /* ================= generic store adapters (Google Sheets 経由) ================= */
-  var SHEET_OF = { tasks:'Tasks', income:'Income', expenses:'Expenses', workoutLog:'WorkoutLog', settings:'Settings' };
-  async function callBackend(action,payload){
-    if(!WEBAPP_URL) throw new Error('保存先(Web App URL)が未設定です');
-    var res = await fetch(WEBAPP_URL, {
-      method:'POST',
-      headers:{ 'Content-Type':'text/plain;charset=utf-8' }, // CORSのプリフライトを避けるため text/plain で送る
-      body: JSON.stringify(Object.assign({action:action}, payload))
-    });
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    var json = await res.json();
-    if(!json.ok) throw new Error(json.error||'バックエンドエラー');
-    return json.result;
-  }
-  async function docGet(path){
-    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
-    if(!sheet) return null;
-    try{ return clone(await callBackend('docGet',{sheet:sheet, id:parts[1]})); }
-    catch(e){ console.error('docGet',path,e); return null; }
-  }
-  async function docSet(path,data){
-    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
-    if(!sheet) return;
-    try{ await callBackend('docSet',{sheet:sheet, id:parts[1], data:data}); }
-    catch(e){ console.error('docSet',path,e); toast('保存に失敗しました：'+e.message); }
-  }
-  async function docUpdate(path,data){
-    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
-    if(!sheet) return;
-    try{ await callBackend('docUpdate',{sheet:sheet, id:parts[1], data:data}); }
-    catch(e){ console.error('docUpdate',path,e); toast('更新に失敗しました：'+e.message); }
-  }
-  async function docDelete(path){
-    var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
-    if(!sheet) return;
-    try{ await callBackend('docDelete',{sheet:sheet, id:parts[1]}); }
-    catch(e){ console.error('docDelete',path,e); toast('削除に失敗しました：'+e.message); }
-  }
-  async function collAdd(name,data){
-    var sheet=SHEET_OF[name];
-    try{ var r = await callBackend('collAdd',{sheet:sheet, data:data}); return r && r.id; }
-    catch(e){ console.error('collAdd',name,e); toast('保存に失敗しました：'+e.message); return null; }
-  }
-  async function collQueryRange(name,field,ge,le,orderDir){
-    var sheet=SHEET_OF[name];
-    try{
-      var out = clone(await callBackend('collQueryRange',{sheet:sheet, field:field, ge:ge, le:le})) || [];
-      out.sort(function(a,b){ return orderDir==='desc' ? (a[field]<b[field]?1:-1) : (a[field]>b[field]?1:-1); });
-      return out;
-    }catch(e){ console.error('query',name,e); return []; }
-  }
-  async function collAll(name){
-    var sheet=SHEET_OF[name];
-    try{
-      var out = clone(await callBackend('collList',{sheet:sheet})) || [];
-      out.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
-      return out;
-    }catch(e){ console.error('collAll',name,e); return []; }
+  function showSetupModal(msg){
+    document.getElementById('setupModal').hidden=false;
+    document.getElementById('setupUrlInput').value=WEBAPP_URL;
+    document.getElementById('setupStatus').textContent=msg||'';
   }
 
   /* ================= settings ================= */
   async function loadSettings(){
-    var s = await docGet('settings/app');
-    if(s) settings = Object.assign({},settings,s);
+    var s = await docGet('settings/app'); // 通信失敗ならここでエラーになり、settingsLoaded は false のまま
+    settings = Object.assign({}, DEFAULT_SETTINGS, s || {});
+    settingsLoaded = true;
   }
   async function saveSettings(next){
-    settings = Object.assign({},settings,next);
-    await docSet('settings/app', settings);
+    var merged = Object.assign({},settings,next);
+    await docSet('settings/app', merged); // 失敗したらエラー。画面の設定値も変えない
+    settings = merged;
   }
 
   /* ================= clock ================= */
   var lastKnownDate=null;
   var rollingOver=false;
+  var rolloverRetryAt=0;
   function startClock(){
     function tick(){
-      var d=new Date();
-      var ds=toDateStr(d);
+      var n=tokyoNow();
+      var ds=utcDateToStr(n);
       document.getElementById('clockDate').innerHTML =
-        '<span class="yr">'+d.getFullYear()+'</span>'+pad2(d.getMonth()+1)+'/'+pad2(d.getDate())+' ('+WEEKDAY_JP[d.getDay()]+')';
-      document.getElementById('clockTime').textContent = pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());
+        '<span class="yr">'+n.getUTCFullYear()+'</span>'+pad2(n.getUTCMonth()+1)+'/'+pad2(n.getUTCDate())+' ('+WEEKDAY_JP[n.getUTCDay()]+')';
+      document.getElementById('clockTime').textContent = pad2(n.getUTCHours())+':'+pad2(n.getUTCMinutes())+':'+pad2(n.getUTCSeconds());
       if(lastKnownDate===null){ lastKnownDate=ds; }
-      else if(ds!==lastKnownDate && !rollingOver){
+      else if(ds!==lastKnownDate && !rollingOver && Date.now()>=rolloverRetryAt){
         var prev=lastKnownDate; lastKnownDate=ds;
         handleDayRollover(prev,ds);
       }
@@ -853,16 +1028,27 @@
   // 日付をまたいでタブを開きっぱなしにしていた場合、次の日になった瞬間に
   // 筋トレのローテーションや今日の集計を自動で切り替える。
   async function handleDayRollover(prevDate,newDate){
+    if(!backendReady) return;
     rollingOver=true;
     try{
+      // 前日の筋トレ記録の保存を先に終わらせる（保存できていない変更を、新しい日のデータで上書きしないため）
+      var flushed = await flushWorkoutSave();
+      if(!flushed){
+        lastKnownDate=prevDate; rolloverRetryAt=Date.now()+60000;
+        toast('前日の筋トレ記録が保存できていないため、日付の切り替えを待っています。「再保存」を押してください',true);
+        return;
+      }
+      var names=['workout','incomeMonth','revenue','expenses'];
       var incomeDateInput=document.getElementById('incomeDate');
       var exDateInput=document.getElementById('exDate');
-      if(incomeDateInput && incomeDateInput.value===prevDate){ incomeDateInput.value=newDate; await loadIncomeDay(newDate); }
-      if(exDateInput && exDateInput.value===prevDate){ exDateInput.value=newDate; }
-      await ensureTodayWorkout();
-      await Promise.all([loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth()]);
+      // 収入に保存していない入力がある場合は、記入日を勝手に切り替えない（入力を消さないため）
+      if(incomeDateInput.value===prevDate && !incomeDirty && !incomeSaving){ incomeDateInput.value=newDate; names.push('incomeDay'); }
+      if(exDateInput.value===prevDate){ exDateInput.value=newDate; }
+      await runLoads(names);
       renderAll();
-      toast('日付が変わったので、筋トレメニューと集計を更新しました');
+      toast(Object.keys(loadErrors).length
+        ? '日付が変わりましたが、一部のデータを読み込めませんでした'
+        : '日付が変わったので、筋トレメニューと集計を更新しました', Object.keys(loadErrors).length>0);
     }catch(e){ console.error('day rollover failed',e); }
     finally{ rollingOver=false; }
   }
@@ -870,32 +1056,43 @@
   /* ================= tasks ================= */
   async function loadTasks(){ tasksCache = await collAll('tasks'); }
   async function addTask(){
+    var input=document.getElementById('taskInput');
+    var title=input.value.trim();
+    if(!title){ toast('タスク内容を入力してください'); return; }
+    var category=document.getElementById('taskCategory').value;
+    var due=document.getElementById('taskDue').value||null;
+    var d=draftFor('task',{ title:title, category:category, due:due });
     try{
-      var input=document.getElementById('taskInput');
-      var title=input.value.trim();
-      if(!title){ toast('タスク内容を入力してください'); return; }
-      var category=document.getElementById('taskCategory').value;
-      var due=document.getElementById('taskDue').value||null;
-      var newId = await collAdd('tasks',{ title:title, category:category, due:due, done:false, createdAt:Date.now() });
-      if(!newId){ toast('タスクの追加に失敗しました。もう一度お試しください'); return; }
-      input.value=''; document.getElementById('taskDue').value='';
-      await loadTasks(); renderTasks(); renderTodayStrip();
+      await collAdd('tasks',{ id:d.id, title:title, category:category, due:due, done:false, createdAt:d.createdAt });
     }catch(e){
-      console.error('addTask failed',e);
-      toast('タスクの追加に失敗しました。もう一度お試しください');
+      toast('タスクを追加できませんでした：'+errMsg(e)+'（もう一度押しても二重には登録されません）',true);
+      return;
     }
+    drafts.task=null;
+    input.value=''; document.getElementById('taskDue').value='';
+    toast('タスクを追加しました');
+    await runLoads(['tasks']);
+    renderTasks(); renderTodayStrip();
   }
-  async function toggleTask(id,done){
-    try{
-      await docUpdate('tasks/'+id,{done:done});
-      await loadTasks(); renderTasks(); renderTodayStrip();
-    }catch(e){ console.error('toggleTask failed',e); toast('更新に失敗しました'); }
+  function toggleTask(id,done){
+    return withKeyBusy('task:'+id, async function(){
+      try{ await docUpdate('tasks/'+id,{done:done}); }
+      catch(e){ toast('更新できませんでした：'+errMsg(e),true); return; }
+      await runLoads(['tasks']);
+      renderTasks(); renderTodayStrip();
+    });
   }
-  async function deleteTask(id){
-    try{
-    await docDelete('tasks/'+id);
-    await loadTasks(); renderTasks(); renderTodayStrip();
-    }catch(e){ console.error('deleteTask failed',e); toast('削除に失敗しました'); }
+  function deleteTask(id){
+    var t=tasksCache.filter(function(x){ return x.id===id; })[0];
+    // L. 削除前の確認
+    if(!window.confirm('このタスクを削除しますか？\n「'+(t?t.title:'')+'」\n\n削除すると元に戻せません。')) return;
+    return withKeyBusy('task:'+id, async function(){
+      try{ await docDelete('tasks/'+id); }
+      catch(e){ toast('削除できませんでした：'+errMsg(e),true); return; }
+      toast('削除しました');
+      await runLoads(['tasks']);
+      renderTasks(); renderTodayStrip();
+    });
   }
   function renderTasks(){
     var open=tasksCache.filter(function(t){return !t.done;});
@@ -916,9 +1113,9 @@
     metaBits.push('<span class="chip '+(t.category==='仕事'?'chip-accent':t.category==='プライベート'?'chip-accent2':'chip-muted')+'">'+esc(t.category||'その他')+'</span>');
     if(t.due) metaBits.push('<span>期限 '+esc(t.due)+'</span>');
     return '<div class="row">'
-      +'<div class="checkbox'+(t.done?' checked':'')+'" data-task-check="'+t.id+'" data-done="'+(t.done?'1':'0')+'">'+(t.done?'✓':'')+'</div>'
+      +'<div class="checkbox'+(t.done?' checked':'')+'" data-task-check="'+esc(t.id)+'" data-done="'+(t.done?'1':'0')+'">'+(t.done?'✓':'')+'</div>'
       +'<div class="row-main"><div class="row-title'+(t.done?' done':'')+'">'+esc(t.title)+'</div><div class="row-meta">'+metaBits.join('')+'</div></div>'
-      +'<button class="btn btn-danger btn-sm" data-task-del="'+t.id+'">削除</button>'
+      +'<button class="btn btn-danger btn-sm" data-task-del="'+esc(t.id)+'">削除</button>'
       +'</div>';
   }
 
@@ -931,26 +1128,48 @@
     var vid=((doc.video&&doc.video.count)||0)*settings.videoUnitPrice;
     return am+pm+gp+vid;
   }
+  // G. 読み込みに失敗したら incomeState='error' にしてエラーを投げる（空データ扱いにしない）
+  // 日付を素早く切り替えた場合に、古い日付の読み込み結果で上書きしないよう、最新の読み込みだけを反映する。
   async function loadIncomeDay(dateStr){
-    incomeDayDoc = await docGet('income/'+dateStr) || {};
+    var seq=++incomeLoadSeq;
+    incomeState='loading'; incomeLoadedDate=null; incomeDayDoc=null;
+    renderIncomeSaveBtn();
+    try{
+      if(!isDateStr(dateStr)) throw new Error('記入日が正しくありません');
+      var doc = await docGet('income/'+dateStr);
+      if(seq!==incomeLoadSeq) return;
+      incomeDayDoc = doc || {}; // 本当にデータが無いときだけ空（新しい日）
+      incomeLoadedDate = dateStr;
+      incomeState = 'ok';
+      incomeDirty = false;
+    }catch(e){
+      if(seq!==incomeLoadSeq) return;
+      incomeDayDoc=null; incomeState='error';
+      throw e;
+    }finally{
+      if(seq===incomeLoadSeq) renderIncomeSaveBtn();
+    }
   }
   async function loadIncomeMonth(){
     var r = monthRange(todayStr());
     incomeMonthDocs = await collQueryRange('income','date',r.first,r.last,'asc');
   }
   async function loadRevenueSeries(){
-    var end=todayDate();
-    var start=addDays(end,-6);
-    var docs = await collQueryRange('income','date',toDateStr(start),toDateStr(end),'asc');
+    var end=todayStr();
+    var start=addDaysStr(end,-6);
+    var docs = await collQueryRange('income','date',start,end,'asc');
     var byDate={}; docs.forEach(function(d){ byDate[d.date]=d; });
-    revenueSeries=[];
+    var series=[];
     for(var i=6;i>=0;i--){
-      var d=addDays(end,-i); var ds=toDateStr(d);
-      revenueSeries.push({date:ds, total: dayRevenue(byDate[ds])});
+      var ds=addDaysStr(end,-i);
+      series.push({date:ds, total: dayRevenue(byDate[ds])});
     }
+    revenueSeries=series;
   }
+  var INCOME_INPUT_IDS=['demaeAmStart','demaeAmEnd','demaeAmAmount','demaePmStart','demaePmEnd','demaePmAmount','videoCount'];
   function fillIncomeForm(){
-    var d=incomeDayDoc||{};
+    // 読み込めていない日は、ほかの日の値や古い値を見せないよう空欄にする（保存もできない）
+    var d = (incomeState==='ok' && incomeDayDoc) ? incomeDayDoc : {};
     document.getElementById('demaeAmStart').value=(d.demaeAm&&d.demaeAm.start)||'';
     document.getElementById('demaeAmEnd').value=(d.demaeAm&&d.demaeAm.end)||'';
     document.getElementById('demaeAmAmount').value=(d.demaeAm&&d.demaeAm.amount)||'';
@@ -959,8 +1178,10 @@
     document.getElementById('demaePmAmount').value=(d.demaePm&&d.demaePm.amount)||'';
     gopalWorked = !!(d.gopal&&d.gopal.worked);
     document.getElementById('videoCount').value=(d.video&&d.video.count)||'';
+    incomeDirty=false;
     updateIncomeLiveTotals();
     renderGopalToggle();
+    renderIncomeSaveBtn();
   }
   function renderGopalToggle(){
     var wrap=document.getElementById('gopalToggle');
@@ -978,22 +1199,61 @@
     document.getElementById('demaeTotalChip').textContent=yen(am+pm);
     document.getElementById('gopalTotalChip').textContent=yen(gp);
     document.getElementById('videoTotalChip').textContent=yen(vid);
-    document.getElementById('incomeDayTotal').textContent='この日の合計：'+yen(am+pm+gp+vid);
+    var totalEl=document.getElementById('incomeDayTotal');
+    if(incomeState==='error') totalEl.textContent='この日のデータを読み込めませんでした（記録は消えていません）';
+    else if(incomeState==='loading') totalEl.textContent='この日のデータを読み込み中…';
+    else totalEl.textContent='この日の合計：'+yen(am+pm+gp+vid);
+  }
+  // 保存ボタンと入力欄の状態。読み込みに成功した日だけ入力・保存できる。
+  function renderIncomeSaveBtn(){
+    var btn=document.getElementById('incomeSaveBtn');
+    var ready = incomeState==='ok' && !incomeSaving;
+    if(incomeSaving){ btn.disabled=true; btn.textContent='保存中...'; }
+    else if(incomeState==='loading' || incomeState==='idle'){ btn.disabled=true; btn.textContent='読み込み中...'; }
+    else if(incomeState==='error'){ btn.disabled=false; btn.textContent='読み込みに失敗しました（タップで再読み込み）'; }
+    else { btn.disabled=false; btn.textContent='この日を保存'; }
+    INCOME_INPUT_IDS.forEach(function(id){ document.getElementById(id).disabled=!ready; });
+    Array.prototype.forEach.call(document.getElementById('gopalToggle').children,function(b){ b.disabled=!ready; });
+    updateIncomeLiveTotals();
+  }
+  // 記入日を変えたとき・再読み込みのとき
+  async function reloadIncomeDayFor(dateStr){
+    try{ await loadIncomeDay(dateStr); delete loadErrors.incomeDay; }
+    catch(e){ loadErrors.incomeDay=true; toast('収入データを読み込めませんでした：'+errMsg(e),true); }
+    renderStatusBanner();
+    if(document.getElementById('incomeDate').value===dateStr) fillIncomeForm();
   }
   async function saveIncomeDay(){
-    var dateStr=document.getElementById('incomeDate').value || todayStr();
-    var data={
+    var dateInput=document.getElementById('incomeDate');
+    var dateStr=incomeLoadedDate;
+    // G. 読み込みに成功した日で、表示中の日付と一致するときだけ保存する
+    if(incomeState!=='ok' || !dateStr || dateInput.value!==dateStr){
+      toast('この日のデータを読み込めていないため保存できません',true);
+      return;
+    }
+    var data=Object.assign({}, incomeDayDoc||{}, {
       date:dateStr,
       demaeAm:{ start:document.getElementById('demaeAmStart').value||null, end:document.getElementById('demaeAmEnd').value||null, amount:+document.getElementById('demaeAmAmount').value||0 },
       demaePm:{ start:document.getElementById('demaePmStart').value||null, end:document.getElementById('demaePmEnd').value||null, amount:+document.getElementById('demaePmAmount').value||0 },
       gopal:{ worked:gopalWorked },
       video:{ count:+document.getElementById('videoCount').value||0 },
       updatedAt:Date.now()
-    };
-    await docSet('income/'+dateStr, data);
-    incomeDayDoc=data;
+    });
+    incomeSaving=true; busyCount++;
+    renderIncomeSaveBtn();
+    try{
+      await docSet('income/'+dateStr, data);
+    }catch(e){
+      // F. 失敗したら「保存しました」を出さない。入力内容はそのまま残す。
+      toast('保存できませんでした：'+errMsg(e)+'（入力内容は残っています。もう一度保存してください）',true);
+      return;
+    }finally{
+      incomeSaving=false; busyCount--;
+      renderIncomeSaveBtn();
+    }
+    if(incomeLoadedDate===dateStr){ incomeDayDoc=data; incomeDirty=false; }
     toast(dateStr+' を保存しました');
-    await Promise.all([loadIncomeMonth(), loadRevenueSeries()]);
+    await runLoads(['incomeMonth','revenue']);
     renderIncomeMonthList(); renderHero(); renderSparkline(); renderTodayStrip();
   }
   function renderIncomeMonthList(){
@@ -1002,8 +1262,8 @@
     var sorted=incomeMonthDocs.slice().sort(function(a,b){ return a.date<b.date?1:-1; });
     document.getElementById('incomeMonthList').innerHTML = sorted.map(function(d){
       var total=dayRevenue(d);
-      var dow=WEEKDAY_JP[new Date(d.date+'T00:00:00').getDay()];
-      return '<div class="row"><div class="row-main"><div class="row-title">'+d.date+' ('+dow+')</div>'
+      var dow=weekdayOf(d.date);
+      return '<div class="row"><div class="row-main"><div class="row-title">'+esc(d.date)+' ('+dow+')</div>'
         +'<div class="row-meta">出前館 '+yen((d.demaeAm&&d.demaeAm.amount||0)+(d.demaePm&&d.demaePm.amount||0))
         +' ・ gopal '+((d.gopal&&d.gopal.worked)?'出勤':'休み')
         +' ・ 動画 '+((d.video&&d.video.count)||0)+'本</div></div>'
@@ -1046,6 +1306,8 @@
       var real=workoutLogToday.items||[];
       var doneN=real.filter(function(i){return i.completed;}).length;
       wSub = real.length ? (doneN+'/'+real.length+' 完了') : '休養日';
+    } else if(workoutState==='error'){
+      wLabel='読込失敗';
     }
     var html=''
       +'<div class="stat-chip"><span class="stat-label">今日の売上</span><span class="stat-value mono">'+yen(todayRev)+'</span></div>'
@@ -1066,15 +1328,31 @@
     var r = monthRange(todayStr());
     expenseMonthDocs = await collQueryRange('expenses','date',r.first,r.last,'desc');
   }
-  async function addExpense(rec){
-    await collAdd('expenses', rec);
-    await loadExpenseMonth();
-    renderExpense(); renderTodayStrip();
+  // I. 下書きのIDを付けて保存する。失敗したら false（下書きのIDは残るので、再送しても二重登録されない）
+  async function saveExpenseDraft(kind, content, source){
+    var d=draftFor(kind, content);
+    var rec=Object.assign({ id:d.id, source:source, createdAt:d.createdAt }, content);
+    try{
+      await collAdd('expenses', rec);
+    }catch(e){
+      toast('記帳できませんでした：'+errMsg(e)+'（もう一度押しても二重には登録されません）',true);
+      return false;
+    }
+    drafts[kind]=null;
+    return true;
   }
-  async function deleteExpense(id){
-    await docDelete('expenses/'+id);
-    await loadExpenseMonth();
-    renderExpense(); renderTodayStrip();
+  function deleteExpense(id){
+    var e=expenseMonthDocs.filter(function(x){ return x.id===id; })[0];
+    // L. 削除前の確認
+    var label = e ? (e.date+'　'+yen(e.amount)+'　'+(e.memo||e.category||'')) : '';
+    if(!window.confirm('この支出を削除しますか？\n'+label+'\n\n削除すると元に戻せません。')) return;
+    return withKeyBusy('expense:'+id, async function(){
+      try{ await docDelete('expenses/'+id); }
+      catch(err){ toast('削除できませんでした：'+errMsg(err),true); return; }
+      toast('削除しました');
+      await runLoads(['expenses']);
+      renderExpense(); renderTodayStrip();
+    });
   }
   function renderExpense(){
     var total=expenseMonthDocs.reduce(function(s,e){return s+(+e.amount||0);},0);
@@ -1098,7 +1376,7 @@
       return '<div class="row"><div class="row-main"><div class="row-title">'+esc(e.memo||e.category||'支出')+'</div>'
         +'<div class="row-meta"><span class="chip '+(e.source==='ai'?'chip-accent':'chip-muted')+'">'+esc(e.category||'その他')+'</span><span>'+esc(e.date)+'</span>'+(e.source==='ai'?'<span>AI解析</span>':'')+'</div></div>'
         +'<div class="mono" style="font-weight:700;">'+yen(e.amount)+'</div>'
-        +'<button class="btn btn-danger btn-sm" data-ex-del="'+e.id+'">削除</button></div>';
+        +'<button class="btn btn-danger btn-sm" data-ex-del="'+esc(e.id)+'">削除</button></div>';
     }).join('') : '<div class="empty-note">今月の記録はまだありません</div>';
     Array.prototype.forEach.call(document.querySelectorAll('[data-ex-del]'),function(el){
       el.addEventListener('click',function(){ deleteExpense(el.getAttribute('data-ex-del')); });
@@ -1119,16 +1397,19 @@
   }
   async function analyzeReceipt(file){
     if(!backendReady){ toast('保存先が未接続のため、AI解析は利用できません'); return; }
+    var pickBtn=document.getElementById('receiptPickBtn');
     var statusEl=document.getElementById('receiptStatus');
     var preview=document.getElementById('receiptPreview');
     preview.src=URL.createObjectURL(file); preview.hidden=false;
     statusEl.textContent='解析中…';
     document.getElementById('receiptConfirm').hidden=true;
+    drafts.receipt=null; pendingReceipt=null;
+    pickBtn.disabled=true; // 解析中に別の写真を選べないようにする
     try{
       var base64 = await fileToBase64(file);
-      var data = await callBackend('analyzeReceipt', { imageBase64:base64, mimeType:(file.type||'image/jpeg') });
+      var data = await callBackend('analyzeReceipt', { imageBase64:base64, mimeType:(file.type||'image/jpeg') }, RECEIPT_TIMEOUT_MS);
       var amount = Math.max(0, Math.round(Number(data && data.amount) || 0));
-      var dateVal = (data && /^\d{4}-\d{2}-\d{2}$/.test(data.date)) ? data.date : todayStr();
+      var dateVal = (data && isDateStr(data.date)) ? data.date : todayStr();
       var cat = (data && EXPENSE_CATEGORIES.indexOf(data.category)>=0) ? data.category : 'その他';
       pendingReceipt = { store:(data&&data.store)?String(data.store):'不明', amount:amount, date:dateVal, category:cat };
       statusEl.textContent='解析できました。内容を確認して記帳してください。';
@@ -1138,7 +1419,9 @@
       document.getElementById('rcCategory').value=pendingReceipt.category;
       document.getElementById('receiptConfirm').hidden=false;
     }catch(e){
-      statusEl.textContent = (e && e.message) ? e.message : '解析中にエラーが発生しました';
+      statusEl.textContent = '解析できませんでした：'+errMsg(e);
+    }finally{
+      pickBtn.disabled=false;
     }
   }
 
@@ -1164,13 +1447,16 @@
     for(var i=0;i<log.items.length;i++){ if(!Array.isArray(log.items[i].log)) return false; }
     return true;
   }
+  // ローテーションの決め方は以前と同じ。
+  // G. 変更点：今日・昨日の記録の読み込みに「失敗」した場合は、例外で中断し、
+  //    今日の記録を新しく作ったり上書きしたりしない（「記録なし」と「通信失敗」を区別する）。
   async function ensureTodayWorkout(){
     var t=todayStr();
-    var existing = await docGet('workoutLog/'+t);
+    var existing = await docGet('workoutLog/'+t);   // 通信失敗ならここで中断
     if(existing && isValidWorkoutLog(existing)){ workoutLogToday=existing; return; }
 
-    var y=toDateStr(addDays(todayDate(),-1));
-    var yLog=await docGet('workoutLog/'+y);
+    var y=addDaysStr(t,-1);
+    var yLog=await docGet('workoutLog/'+y);          // 通信失敗ならここで中断
     if(yLog && !isValidWorkoutLog(yLog)) yLog=null;
     var newIndex, carried;
     if(!yLog){
@@ -1182,50 +1468,148 @@
     }
     var assignedKey=QUEUE[newIndex].key;
     var log={ date:t, queueIndex:newIndex, assignedKey:assignedKey, effectiveKey:assignedKey, manualOverride:false, carried:carried, items:buildItemsFor(assignedKey) };
-    await docSet('workoutLog/'+t, log);
+    await docSet('workoutLog/'+t, log);             // 保存できたときだけ今日のメニューとして使う
     workoutLogToday=log;
   }
+  async function loadWorkout(){
+    workoutState='loading';
+    try{
+      await ensureTodayWorkout();
+      workoutState='ok';
+    }catch(e){
+      // 前日の記録を「今日」として表示し続けないようにする
+      if(!workoutLogToday || workoutLogToday.date!==todayStr()) workoutLogToday=null;
+      workoutState = workoutLogToday ? 'ok' : 'error';
+      throw e;
+    }
+  }
+
+  // J. 筋トレ記録の保存を1件ずつ順番に送る。
+  //    同時に送らないので、古い内容が新しい内容を後から上書きすることがない。
+  //    送信中に変更があれば、送信完了後に「その時点の最新の内容」を1回だけ送る。
+  var woSave={ inFlight:false, dirty:false, failed:false, waiters:[] };
+  function queueWorkoutSave(){
+    return new Promise(function(resolve){
+      woSave.dirty=true;
+      woSave.waiters.push(resolve);
+      if(!woSave.inFlight) runWorkoutSaveLoop();
+    });
+  }
+  async function runWorkoutSaveLoop(){
+    woSave.inFlight=true; busyCount++;
+    try{
+      while(woSave.dirty && workoutLogToday){
+        woSave.dirty=false;
+        var batch=woSave.waiters; woSave.waiters=[];
+        var snapshot=clone(workoutLogToday);
+        try{
+          await docSet('workoutLog/'+snapshot.date, snapshot);
+          woSave.failed=false;
+          batch.forEach(function(r){ r(true); });
+        }catch(e){
+          woSave.failed=true;
+          woSave.dirty=true; // 保存できていない変更が残っている
+          batch.concat(woSave.waiters).forEach(function(r){ r(false); });
+          woSave.waiters=[];
+          toast('筋トレ記録を保存できませんでした：'+errMsg(e)+'（画面の入力は残っています。「再保存」を押してください）',true);
+          break;
+        }
+      }
+    }finally{
+      woSave.inFlight=false; busyCount--;
+      var rest=woSave.waiters; woSave.waiters=[];
+      rest.forEach(function(r){ r(!woSave.dirty); });
+      renderWorkoutSaveStatus();
+    }
+  }
+  // 保存待ちの筋トレ記録をすべて送り終えるまで待つ。保存できていれば true。
+  function flushWorkoutSave(){
+    if(!woSave.inFlight && !woSave.dirty) return Promise.resolve(true);
+    if(!woSave.inFlight) return queueWorkoutSave();
+    return new Promise(function(resolve){ woSave.waiters.push(resolve); });
+  }
+  function renderWorkoutSaveStatus(){
+    document.getElementById('workoutSaveStatus').hidden = !(woSave.failed && woSave.dirty && !woSave.inFlight);
+  }
+  function setHasEnteredData(){
+    if(!workoutLogToday) return false;
+    return (workoutLogToday.items||[]).some(function(it){
+      return it.completed || (it.log||[]).some(function(s){ return s.kg!=null || s.reps!=null; });
+    });
+  }
+
   async function setWorkoutOverride(newKey){
     if(!workoutLogToday) return;
+    if(newKey===workoutLogToday.effectiveKey) return;
+    // L. 入力済みの記録が消える操作なので確認する
+    if(setHasEnteredData() && !window.confirm('今日のメニューを変更すると、入力済みの重量・回数・完了チェックは消えます。変更しますか？')){
+      document.getElementById('workoutMenuSelect').value=workoutLogToday.effectiveKey;
+      return;
+    }
     workoutLogToday = Object.assign({}, workoutLogToday, {
       effectiveKey:newKey,
       manualOverride:(newKey!==workoutLogToday.assignedKey),
       items: buildItemsFor(newKey)
     });
-    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
-    toast(newKey==='rest' ? '本日を休みに変更しました。元のメニューは翌日以降に繰り越されます。' : 'メニューを変更しました');
     renderWorkout(); renderTodayStrip();
+    var ok = await queueWorkoutSave();
+    if(ok) toast(newKey==='rest' ? '本日を休みに変更しました。元のメニューは翌日以降に繰り越されます。' : 'メニューを変更しました');
   }
-  async function toggleWorkoutDone(idx,val){
+  function toggleWorkoutDone(idx,val){
+    if(!workoutLogToday) return;
     workoutLogToday.items[idx].completed=val;
-    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
     renderWorkout(); renderTodayStrip();
+    queueWorkoutSave();
   }
-  async function updateWorkoutSet(idx,setIdx,field,val){
+  function updateWorkoutSet(idx,setIdx,field,val){
+    if(!workoutLogToday) return;
     workoutLogToday.items[idx].log[setIdx][field]= val===''? null : +val;
-    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
+    queueWorkoutSave();
   }
-  async function addWorkoutSet(idx){
+  function addWorkoutSet(idx){
+    if(!workoutLogToday) return;
     workoutLogToday.items[idx].log.push({kg:null,reps:null});
-    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
     renderWorkout();
+    queueWorkoutSave();
   }
-  async function removeWorkoutSet(idx,setIdx){
+  function removeWorkoutSet(idx,setIdx){
+    if(!workoutLogToday) return;
+    var s=workoutLogToday.items[idx].log[setIdx];
+    // L. 入力済みのセットを消すときだけ確認する
+    if(s && (s.kg!=null || s.reps!=null) && !window.confirm((setIdx+1)+'セット目（'+(s.kg==null?'-':s.kg)+'kg × '+(s.reps==null?'-':s.reps)+'回）を削除しますか？')) return;
     workoutLogToday.items[idx].log.splice(setIdx,1);
     if(!workoutLogToday.items[idx].log.length) workoutLogToday.items[idx].log.push({kg:null,reps:null});
-    await docSet('workoutLog/'+workoutLogToday.date, workoutLogToday);
     renderWorkout();
+    queueWorkoutSave();
   }
   function populateWorkoutSelect(){
     var sel=document.getElementById('workoutMenuSelect');
     sel.innerHTML=QUEUE.map(function(q){ return '<option value="'+q.key+'">'+esc(q.label)+'</option>'; }).join('');
   }
   function renderWorkout(){
-    if(!workoutLogToday) return;
     var titleEl=document.getElementById('workoutTitle');
     var chipEl=document.getElementById('workoutStatusChip');
     var subEl=document.getElementById('workoutSub');
-    document.getElementById('workoutMenuSelect').value=workoutLogToday.effectiveKey;
+    var selEl=document.getElementById('workoutMenuSelect');
+    var reloadBtn=document.getElementById('workoutReloadBtn');
+    renderWorkoutSaveStatus();
+
+    if(!workoutLogToday){
+      // G. 読み込み中・読み込み失敗の間は、何も作らず・何も保存しない
+      var isErr = workoutState==='error';
+      titleEl.textContent = isErr ? '筋トレ記録を読み込めませんでした' : '読み込み中…';
+      chipEl.textContent = isErr ? '読込失敗' : ''; chipEl.className = isErr ? 'chip chip-danger' : 'chip';
+      subEl.textContent = isErr ? '記録は消えていません。通信状態を確認して「再読み込み」を押してください。' : '';
+      reloadBtn.hidden = !isErr;
+      selEl.disabled = true;
+      document.getElementById('seqStrip').innerHTML='';
+      document.getElementById('workoutProgressChip').textContent='–';
+      document.getElementById('workoutList').innerHTML='';
+      return;
+    }
+    reloadBtn.hidden = true;
+    selEl.disabled = false;
+    selEl.value=workoutLogToday.effectiveKey;
 
     if(workoutLogToday.effectiveKey==='rest'){
       titleEl.textContent = workoutLogToday.manualOverride ? '本日は休み（手動変更）' : '本日は休養日';
@@ -1298,6 +1682,41 @@
     });
   }
 
+  /* ================= 保存先URLの切り替え ================= */
+  // 接続テストに成功したときだけ切り替える。切り替える前に、前の保存先への保存待ちを送り終える。
+  async function switchBackend(url, statusEl){
+    if(!/^https:\/\//.test(url)){ statusEl.textContent='https:// から始まるURLを入力してください'; return false; }
+    if(incomeSaving || Object.keys(busyKeys).length){ statusEl.textContent='保存中の処理が終わってから、もう一度お試しください'; return false; }
+    statusEl.textContent='保存待ちの記録を確認しています…';
+    var flushed = await flushWorkoutSave();
+    if(!flushed && !window.confirm('筋トレ記録に、前の保存先へ保存できていない変更があります。このまま切り替えると、その変更は失われます。切り替えますか？')) {
+      statusEl.textContent='切り替えを中止しました'; return false;
+    }
+    if(incomeDirty && !window.confirm('収入の入力が保存されていません。このまま切り替えると、その入力は失われます。切り替えますか？')){
+      statusEl.textContent='切り替えを中止しました'; return false;
+    }
+    statusEl.textContent='接続を確認しています…';
+    var r;
+    try{
+      r = await postJson(url,'ping',{});
+      if(!r || !r.pong) throw new Error('応答が正しくありません');
+    }catch(e){
+      statusEl.textContent='接続できませんでした：'+errMsg(e)+'（URLを確認してください）';
+      return false;
+    }
+    // ここから新しい保存先に切り替え（前の保存先のデータは画面から消してから読み直す）
+    WEBAPP_URL=url;
+    localStorage.setItem('gl_webapp_url', url);
+    backendReady=true;
+    backendVersion=r.version||null;
+    resetDataState();
+    renderAll();
+    statusEl.textContent='接続できました。データを読み込んでいます…';
+    await loadEverything();
+    statusEl.textContent = Object.keys(loadErrors).length ? '接続しましたが、一部のデータを読み込めませんでした' : '接続できました';
+    return true;
+  }
+
   /* ================= tabs / modal / wiring ================= */
   function switchTab(name){
     currentTab=name;
@@ -1310,6 +1729,14 @@
     });
   }
 
+  function hideReceiptDraft(statusText){
+    pendingReceipt=null;
+    document.getElementById('receiptConfirm').hidden=true;
+    document.getElementById('receiptPreview').hidden=true;
+    document.getElementById('receiptStatus').textContent=statusText||'';
+    document.getElementById('receiptFile').value='';
+  }
+
   function wireStaticUI(){
     Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'),function(b){
       b.addEventListener('click',function(){ switchTab(b.getAttribute('data-tab')); });
@@ -1317,61 +1744,103 @@
 
     populateWorkoutSelect();
     document.getElementById('workoutMenuSelect').addEventListener('change',function(){ setWorkoutOverride(this.value); });
+    document.getElementById('workoutReloadBtn').addEventListener('click',function(){
+      var btn=this;
+      withBusy(btn,'読み込み中...',async function(){
+        await runLoads(['workout']);
+        renderWorkout(); renderTodayStrip();
+        if(loadErrors.workout) toast('まだ読み込めません。少し待ってから再度お試しください',true);
+      });
+    });
+    document.getElementById('workoutSaveRetryBtn').addEventListener('click',async function(){
+      var ok = await queueWorkoutSave();
+      if(ok) toast('筋トレ記録を保存しました');
+    });
 
-    document.getElementById('taskAddBtn').addEventListener('click',addTask);
+    // タスク追加：ボタンとEnterキーのどちらからでも、処理中は二重に送らない
+    var taskAddBtn=document.getElementById('taskAddBtn');
+    function addTaskGuarded(){ return withBusy(taskAddBtn,'追加中...',addTask); }
+    taskAddBtn.addEventListener('click',addTaskGuarded);
     document.getElementById('taskInput').addEventListener('keydown',function(e){
-      if(e.key==='Enter' && !e.isComposing && e.keyCode!==229) addTask();
+      if(e.key==='Enter' && !e.isComposing && e.keyCode!==229) addTaskGuarded();
     });
 
-    document.getElementById('incomeDate').addEventListener('change',async function(){
-      await loadIncomeDay(this.value); fillIncomeForm();
+    var incomeDateInput=document.getElementById('incomeDate');
+    incomeDateInput.addEventListener('focus',function(){ this.dataset.prev=this.value; });
+    incomeDateInput.addEventListener('change',function(){
+      var v=this.value;
+      if(incomeDirty && !window.confirm('保存していない収入の入力があります。記入日を変えると、その入力は消えます。変えますか？')){
+        this.value = incomeLoadedDate || this.dataset.prev || v;
+        return;
+      }
+      this.dataset.prev=v;
+      incomeDirty=false;
+      fillIncomeForm(); // 読み込みが終わるまでは空欄・保存不可
+      reloadIncomeDayFor(v);
     });
-    ['demaeAmAmount','demaePmAmount','videoCount'].forEach(function(id){
-      document.getElementById(id).addEventListener('input',updateIncomeLiveTotals);
+    INCOME_INPUT_IDS.forEach(function(id){
+      document.getElementById(id).addEventListener('input',function(){ incomeDirty=true; updateIncomeLiveTotals(); });
     });
     document.getElementById('gopalToggle').addEventListener('click',function(e){
-      var btn=e.target.closest('button'); if(!btn) return;
+      var btn=e.target.closest('button'); if(!btn || btn.disabled) return;
       gopalWorked = btn.getAttribute('data-val')==='true';
+      incomeDirty=true;
       renderGopalToggle(); updateIncomeLiveTotals();
     });
-    document.getElementById('incomeSaveBtn').addEventListener('click',saveIncomeDay);
+    document.getElementById('incomeSaveBtn').addEventListener('click',function(){
+      if(incomeSaving || incomeState==='loading') return;
+      if(incomeState==='error'){ reloadIncomeDayFor(document.getElementById('incomeDate').value); return; }
+      saveIncomeDay();
+    });
 
-    document.getElementById('exAddBtn').addEventListener('click',async function(){
-      var amount=+document.getElementById('exAmount').value;
-      if(!amount || amount<=0){ toast('金額を入力してください'); return; }
-      var rec={ date:document.getElementById('exDate').value||todayStr(), amount:amount, category:document.getElementById('exCategory').value, memo:document.getElementById('exMemo').value.trim(), source:'manual', createdAt:Date.now() };
-      await addExpense(rec);
-      document.getElementById('exAmount').value=''; document.getElementById('exMemo').value='';
-      toast('記帳しました');
+    var exAddBtn=document.getElementById('exAddBtn');
+    exAddBtn.addEventListener('click',function(){
+      withBusy(exAddBtn,'保存中...',async function(){
+        var amount=+document.getElementById('exAmount').value;
+        if(!amount || amount<=0){ toast('金額を入力してください'); return; }
+        var date=document.getElementById('exDate').value||todayStr();
+        if(!isDateStr(date)){ toast('日付を確認してください'); return; }
+        var content={ date:date, amount:amount, category:document.getElementById('exCategory').value, memo:document.getElementById('exMemo').value.trim() };
+        var ok = await saveExpenseDraft('expense', content, 'manual');
+        if(!ok) return;
+        document.getElementById('exAmount').value=''; document.getElementById('exMemo').value='';
+        toast('記帳しました');
+        await runLoads(['expenses']);
+        renderExpense(); renderTodayStrip();
+      });
     });
 
     document.getElementById('receiptPickBtn').addEventListener('click',function(){ document.getElementById('receiptFile').click(); });
     document.getElementById('receiptFile').addEventListener('change',function(){
       if(this.files && this.files[0]) analyzeReceipt(this.files[0]);
     });
-    document.getElementById('rcSaveBtn').addEventListener('click',async function(){
-      var rec={
-        date:document.getElementById('rcDate').value||todayStr(),
-        amount:+document.getElementById('rcAmount').value||0,
-        category:document.getElementById('rcCategory').value,
-        memo:document.getElementById('rcStore').value.trim(),
-        source:'ai', createdAt:Date.now()
-      };
-      if(rec.amount<=0){ toast('金額を確認してください'); return; }
-      await addExpense(rec);
-      pendingReceipt=null;
-      document.getElementById('receiptConfirm').hidden=true;
-      document.getElementById('receiptPreview').hidden=true;
-      document.getElementById('receiptStatus').textContent='記帳しました。続けて撮影できます。';
-      document.getElementById('receiptFile').value='';
-      toast('家計簿に記帳しました');
+    var rcSaveBtn=document.getElementById('rcSaveBtn');
+    rcSaveBtn.addEventListener('click',function(){
+      withBusy(rcSaveBtn,'保存中...',async function(){
+        var content={
+          date:document.getElementById('rcDate').value||todayStr(),
+          amount:+document.getElementById('rcAmount').value||0,
+          category:document.getElementById('rcCategory').value,
+          memo:document.getElementById('rcStore').value.trim()
+        };
+        if(content.amount<=0){ toast('金額を確認してください'); return; }
+        if(!isDateStr(content.date)){ toast('日付を確認してください'); return; }
+        var ok = await saveExpenseDraft('receipt', content, 'ai');
+        if(!ok) return; // 失敗したら確認画面を閉じない（入力内容を残す）
+        hideReceiptDraft('記帳しました。続けて撮影できます。');
+        toast('家計簿に記帳しました');
+        await runLoads(['expenses']);
+        renderExpense(); renderTodayStrip();
+      });
     });
     document.getElementById('rcDiscardBtn').addEventListener('click',function(){
-      pendingReceipt=null;
-      document.getElementById('receiptConfirm').hidden=true;
-      document.getElementById('receiptPreview').hidden=true;
-      document.getElementById('receiptStatus').textContent='';
-      document.getElementById('receiptFile').value='';
+      if(rcSaveBtn.dataset.busy==='1') return;
+      drafts.receipt=null;
+      hideReceiptDraft('');
+    });
+
+    document.getElementById('statusRetryBtn').addEventListener('click',function(){
+      withBusy(this,'読み込み中...',retryFailedLoads);
     });
 
     document.getElementById('settingsBtn').addEventListener('click',function(){
@@ -1380,66 +1849,75 @@
       document.getElementById('setExpenseBudget').value=settings.expenseBudget;
       document.getElementById('setWebappUrl').value=WEBAPP_URL;
       document.getElementById('setWebappStatus').textContent='';
+      var saveBtn=document.getElementById('setSaveBtn');
+      saveBtn.disabled=!settingsLoaded;
+      saveBtn.textContent= settingsLoaded ? '保存' : '設定を読み込めていません';
+      document.getElementById('setVersionInfo').textContent='アプリ: '+APP_VERSION+'　／　保存先: '+(backendVersion||(backendReady?'旧バージョン':'未接続'));
       document.getElementById('settingsModal').hidden=false;
     });
     document.getElementById('setCloseBtn').addEventListener('click',function(){ document.getElementById('settingsModal').hidden=true; });
     document.getElementById('settingsModal').addEventListener('click',function(e){ if(e.target===this) this.hidden=true; });
-    document.getElementById('setSaveBtn').addEventListener('click',async function(){
-      await saveSettings({
-        videoUnitPrice:+document.getElementById('setVideoPrice').value||0,
-        gopalFixed:+document.getElementById('setGopalFixed').value||0,
-        expenseBudget:+document.getElementById('setExpenseBudget').value||0
+    var setSaveBtn=document.getElementById('setSaveBtn');
+    setSaveBtn.addEventListener('click',function(){
+      withBusy(setSaveBtn,'保存中...',async function(){
+        // 設定を読み込めていないときは、初期値で上書きしないよう保存しない
+        if(!settingsLoaded){ toast('設定を読み込めていないため保存できません。再読み込みしてください',true); return; }
+        try{
+          await saveSettings({
+            videoUnitPrice:+document.getElementById('setVideoPrice').value||0,
+            gopalFixed:+document.getElementById('setGopalFixed').value||0,
+            expenseBudget:+document.getElementById('setExpenseBudget').value||0
+          });
+        }catch(e){
+          toast('設定を保存できませんでした：'+errMsg(e),true);
+          return; // 失敗したら画面を閉じない
+        }
+        document.getElementById('settingsModal').hidden=true;
+        updateIncomeLiveTotals(); renderHero(); renderIncomeMonthList(); renderExpense(); renderTodayStrip();
+        toast('設定を保存しました');
+      }).then(function(){
+        setSaveBtn.disabled=!settingsLoaded;
+        if(!settingsLoaded) setSaveBtn.textContent='設定を読み込めていません';
       });
-      document.getElementById('settingsModal').hidden=true;
-      updateIncomeLiveTotals(); renderHero(); renderExpense(); renderTodayStrip();
-      toast('設定を保存しました');
     });
-    document.getElementById('setWebappTestBtn').addEventListener('click',async function(){
-      var url=document.getElementById('setWebappUrl').value.trim();
-      var statusEl=document.getElementById('setWebappStatus');
-      if(!url){ statusEl.textContent='URLを入力してください'; return; }
-      statusEl.textContent='接続を確認しています…';
-      var prevUrl=WEBAPP_URL;
-      WEBAPP_URL=url;
-      var ok=await testBackendConnection(true);
-      if(!ok){
-        statusEl.textContent='接続できませんでした。URLを確認してください';
-        WEBAPP_URL=prevUrl;
-        return;
-      }
-      localStorage.setItem('gl_webapp_url', url);
-      statusEl.textContent='接続できました。データを再読み込みします…';
-      toast('保存先を変更しました');
-      await loadSettings();
-      var loadResults = await Promise.allSettled([ loadTasks(), loadIncomeDay(document.getElementById('incomeDate').value||todayStr()), loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth(), ensureTodayWorkout() ]);
-      loadResults.forEach(function(r){ if(r.status==='rejected') console.error('reload failed',r.reason); });
-      renderAll();
-      statusEl.textContent='接続できました';
+    var setWebappTestBtn=document.getElementById('setWebappTestBtn');
+    setWebappTestBtn.addEventListener('click',function(){
+      withBusy(setWebappTestBtn,'接続中...',async function(){
+        var url=document.getElementById('setWebappUrl').value.trim();
+        var statusEl=document.getElementById('setWebappStatus');
+        if(!url){ statusEl.textContent='URLを入力してください'; return; }
+        var ok = await switchBackend(url, statusEl);
+        if(ok){
+          toast('保存先を変更しました');
+          document.getElementById('setVideoPrice').value=settings.videoUnitPrice;
+          document.getElementById('setGopalFixed').value=settings.gopalFixed;
+          document.getElementById('setExpenseBudget').value=settings.expenseBudget;
+          document.getElementById('setVersionInfo').textContent='アプリ: '+APP_VERSION+'　／　保存先: '+(backendVersion||'旧バージョン');
+        }
+      }).then(function(){
+        setSaveBtn.disabled=!settingsLoaded;
+        setSaveBtn.textContent= settingsLoaded ? '保存' : '設定を読み込めていません';
+      });
     });
 
-    document.getElementById('setupSaveBtn').addEventListener('click',async function(){
-      var url=document.getElementById('setupUrlInput').value.trim();
-      var statusEl=document.getElementById('setupStatus');
-      if(!url){ statusEl.textContent='URLを入力してください'; return; }
-      statusEl.textContent='接続を確認しています…';
-      WEBAPP_URL=url;
-      var ok=await testBackendConnection(true);
-      if(!ok){
-        statusEl.textContent='接続できませんでした。URLを確認してください';
-        WEBAPP_URL=localStorage.getItem('gl_webapp_url')||'';
-        return;
-      }
-      localStorage.setItem('gl_webapp_url', url);
-      document.getElementById('setupModal').hidden=true;
-      statusEl.textContent='';
-      toast('接続しました');
+    var setupSaveBtn=document.getElementById('setupSaveBtn');
+    setupSaveBtn.addEventListener('click',function(){
+      withBusy(setupSaveBtn,'接続中...',async function(){
+        var url=document.getElementById('setupUrlInput').value.trim();
+        var statusEl=document.getElementById('setupStatus');
+        if(!url){ statusEl.textContent='URLを入力してください'; return; }
+        var ok = await switchBackend(url, statusEl);
+        if(ok){
+          document.getElementById('setupModal').hidden=true;
+          statusEl.textContent='';
+          toast('接続しました');
+        }
+      });
+    });
 
-      await loadSettings();
-      document.getElementById('incomeDate').value = todayStr();
-      document.getElementById('exDate').value = todayStr();
-      var loadResults = await Promise.allSettled([ loadTasks(), loadIncomeDay(todayStr()), loadIncomeMonth(), loadRevenueSeries(), loadExpenseMonth(), ensureTodayWorkout() ]);
-      loadResults.forEach(function(r){ if(r.status==='rejected') console.error('initial load failed',r.reason); });
-      renderAll();
+    // 保存中・保存していない入力があるときにページを閉じようとしたら警告する
+    window.addEventListener('beforeunload',function(e){
+      if(busyCount>0 || woSave.dirty || incomeDirty){ e.preventDefault(); e.returnValue=''; }
     });
   }
 
@@ -1447,7 +1925,8 @@
     try{ fn(); }catch(e){ console.error('render failed:',name,e); }
   }
   function renderAll(){
-    safeRun('fillIncomeForm',fillIncomeForm);
+    // 保存していない収入の入力がある場合は、フォームを上書きしない
+    safeRun('fillIncomeForm',function(){ if(!incomeDirty) fillIncomeForm(); else renderIncomeSaveBtn(); });
     safeRun('renderTasks',renderTasks);
     safeRun('renderIncomeMonthList',renderIncomeMonthList);
     safeRun('renderHero',renderHero);
@@ -1455,9 +1934,10 @@
     safeRun('renderExpense',renderExpense);
     safeRun('renderWorkout',renderWorkout);
     safeRun('renderTodayStrip',renderTodayStrip);
+    safeRun('renderStatusBanner',renderStatusBanner);
   }
 
-  boot().catch(function(e){ console.error('boot failed',e); toast('読み込み中にエラーが発生しました。再読み込みしてください'); });
+  boot().catch(function(e){ console.error('boot failed',e); toast('読み込み中にエラーが発生しました。再読み込みしてください',true); });
 })();
 </script>
 </body>

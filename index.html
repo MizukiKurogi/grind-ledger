@@ -692,7 +692,7 @@
 
   /* ================= version ================= */
   // 反映確認用。設定画面の下に表示されます。
-  var APP_VERSION = '2026-09-30-phase1-index';
+  var APP_VERSION = '2026-09-30-phase1.1-index';
 
   /* ================= helpers ================= */
   // K. 日付はすべて日本時間（Asia/Tokyo）で扱う。
@@ -721,6 +721,7 @@
   // db から返るドキュメントは凍結されている場合があるため、後から編集できるよう複製してから使う。
   function clone(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
   function errMsg(e){ return (e && e.message) ? e.message : String(e); }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
 
   // I. 新規登録用のID（UUID）をブラウザ側で作る
   function newId(){
@@ -768,8 +769,9 @@
   // Google スプレッドシートへ保存し、レシート画像のAI解析も同じApps Script経由（Gemini API）で行う。
   // 保存先の Web App URL は設定画面から入力し、この端末（ブラウザ）の localStorage に保存する。
   var WEBAPP_URL = localStorage.getItem('gl_webapp_url') || '';
-  var backendReady = false;
+  var backendReady = false;   // 保存先URLが設定されているか（接続の成否ではない）
   var backendVersion = null; // 接続先の Code.gs のバージョン（旧環境は null）
+  var versionChecked = false; // バージョンを確認できたか
 
   var DEFAULT_SETTINGS = { videoUnitPrice:2000, gopalFixed:15000, expenseBudget:30000 };
   var settings = Object.assign({}, DEFAULT_SETTINGS);
@@ -797,8 +799,7 @@
   var currentTab='tasks';
   var pendingReceipt=null;
 
-  // 読み込みに失敗したデータの名前（画面上部に表示する）
-  var loadErrors={};
+  // 各データの読み込み状態（「読み込み管理」の loadState を参照）
 
   // I. 入力中の新規登録に付けるID。送信に失敗して再送しても同じIDを使うので二重登録されない。
   //    入力内容を変えた場合だけ新しいIDにする。
@@ -818,7 +819,8 @@
     woSave.dirty=false; woSave.failed=false;
     drafts={ task:null, expense:null, receipt:null };
     pendingReceipt=null;
-    loadErrors={};
+    loadState={};
+    backendVersion=null; versionChecked=false;
     document.getElementById('receiptConfirm').hidden=true;
     document.getElementById('receiptPreview').hidden=true;
     document.getElementById('receiptStatus').textContent='';
@@ -828,14 +830,38 @@
 
   /* ================= F/G. 通信（Google Sheets 経由） ================= */
   var SHEET_OF = { tasks:'Tasks', income:'Income', expenses:'Expenses', workoutLog:'WorkoutLog', settings:'Settings' };
-  var REQUEST_TIMEOUT_MS = 30000;
-  var RECEIPT_TIMEOUT_MS = 90000;
+  var READ_TIMEOUT_MS = 15000;    // 読み込み1回あたりの待ち時間
+  var WRITE_TIMEOUT_MS = 30000;   // 保存1回あたりの待ち時間
+  var RECEIPT_TIMEOUT_MS = 90000; // レシート解析の待ち時間
+  // 読み込みが一時的に失敗したら、約1.5秒後・約4秒後に自動で再試行する（合計3回まで）
+  var READ_RETRY_DELAYS_MS = [1500, 4000];
+  // Apps Script へ同時に送る通信は最大3件まで（一度に大量に送らない）
+  var MAX_CONCURRENT_REQUESTS = 3;
+
+  var reqActive=0, reqWaiting=[];
+  function acquireSlot(){
+    return new Promise(function(resolve){
+      if(reqActive<MAX_CONCURRENT_REQUESTS){ reqActive++; resolve(); }
+      else reqWaiting.push(resolve);
+    });
+  }
+  function releaseSlot(){
+    var next=reqWaiting.shift();
+    if(next) next(); else reqActive--;
+  }
+
+  // retryable = 一時的な失敗（もう一度試せば成功する可能性がある）かどうか
+  function makeError(msg, retryable){ var e=new Error(msg); e.retryable=!!retryable; return e; }
+  function staleError(){ var e=makeError('保存先が変更されたため、読み込みを中止しました', false); e.stale=true; return e; }
+  // Apps Script 側が返した「一時的な混雑・タイムアウト」系のエラー
+  var TRANSIENT_SERVER_ERROR = /混み合って|timed out|timeout|タイムアウト|Service|サービス|too many|しばらく|Internal|内部エラー|予期しない/i;
 
   // 通信に失敗したら必ずエラー（例外）にする。「データなし」とは絶対に区別する。
   async function postJson(url, action, payload, timeoutMs){
-    if(!url) throw new Error('保存先(Web App URL)が未設定です');
+    if(!url) throw makeError('保存先(Web App URL)が未設定です', false);
+    await acquireSlot();
     var ctrl = (typeof AbortController!=='undefined') ? new AbortController() : null;
-    var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, timeoutMs || REQUEST_TIMEOUT_MS) : null;
+    var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, timeoutMs || WRITE_TIMEOUT_MS) : null;
     try{
       var res;
       try{
@@ -846,20 +872,46 @@
           signal: ctrl ? ctrl.signal : undefined
         });
       }catch(e){
-        if(e && e.name==='AbortError') throw new Error('通信がタイムアウトしました');
-        throw new Error('通信できませんでした（電波・ネット接続を確認してください）');
+        if(e && e.name==='AbortError') throw makeError('通信がタイムアウトしました', true);
+        throw makeError('通信できませんでした（電波・ネット接続を確認してください）', true);
       }
-      if(!res.ok) throw new Error('サーバーエラー（HTTP '+res.status+'）');
+      if(!res.ok) throw makeError('サーバーエラー（HTTP '+res.status+'）', res.status>=500 || res.status===429 || res.status===408);
       var json;
       try{ json = await res.json(); }
-      catch(e){ throw new Error('サーバーの応答を読み取れませんでした'); }
-      if(!json || json.ok!==true) throw new Error((json && json.error) || 'バックエンドエラー');
+      catch(e){ throw makeError((e && e.name==='AbortError') ? '通信がタイムアウトしました' : 'サーバーの応答を読み取れませんでした', true); }
+      if(!json || json.ok!==true){
+        var m=(json && json.error) || 'バックエンドエラー';
+        throw makeError(m, TRANSIENT_SERVER_ERROR.test(m));
+      }
       return json.result;
     }finally{
       if(timer) clearTimeout(timer);
+      releaseSlot();
     }
   }
-  function callBackend(action,payload,timeoutMs){ return postJson(WEBAPP_URL, action, payload, timeoutMs); }
+  // 読み込み専用の通信。一時的な失敗なら少し待って自動で再試行する（最大3回）。
+  // すべて失敗したときだけエラーにする。checkStale=true のとき、途中で保存先URLが
+  // 変わったら古い保存先の結果は使わない。
+  // ※ 保存（書き込み）は自動で再試行しない（利用者が結果を見て押し直す。IDで重複は防止済み）。
+  async function readRequest(url, action, payload, checkStale){
+    var lastErr=null;
+    for(var attempt=0; attempt<=READ_RETRY_DELAYS_MS.length; attempt++){
+      if(attempt>0) await sleep(READ_RETRY_DELAYS_MS[attempt-1] + Math.floor(Math.random()*500));
+      if(checkStale && url!==WEBAPP_URL) throw staleError();
+      try{
+        var r = await postJson(url, action, payload, READ_TIMEOUT_MS);
+        if(checkStale && url!==WEBAPP_URL) throw staleError();
+        return r;
+      }catch(e){
+        lastErr=e;
+        if(!e.retryable) throw e;
+        console.warn('読み込みを再試行します', action, (payload && payload.sheet)||'', '（'+(attempt+1)+'回目失敗）', e.message);
+      }
+    }
+    throw lastErr;
+  }
+  function readBackend(action,payload){ return readRequest(WEBAPP_URL, action, payload, true); }
+  function callBackend(action,payload,timeoutMs){ return postJson(WEBAPP_URL, action, payload, timeoutMs || WRITE_TIMEOUT_MS); }
 
   function splitPath(path){
     var parts=path.split('/'); var sheet=SHEET_OF[parts[0]];
@@ -869,7 +921,7 @@
   // 見つからなければ null。通信失敗は null ではなくエラーになる。
   async function docGet(path){
     var p=splitPath(path);
-    var r = await callBackend('docGet',{sheet:p.sheet, id:p.id});
+    var r = await readBackend('docGet',{sheet:p.sheet, id:p.id});
     return r==null ? null : clone(r);
   }
   // 以下の保存系は、失敗したら必ずエラーになる（呼び出し側で成功・失敗を表示する）
@@ -893,70 +945,163 @@
     return r;
   }
   async function collQueryRange(name,field,ge,le,orderDir){
-    var out = clone(await callBackend('collQueryRange',{sheet:SHEET_OF[name], field:field, ge:ge, le:le})) || [];
+    var out = clone(await readBackend('collQueryRange',{sheet:SHEET_OF[name], field:field, ge:ge, le:le})) || [];
     out.sort(function(a,b){ return orderDir==='desc' ? (a[field]<b[field]?1:-1) : (a[field]>b[field]?1:-1); });
     return out;
   }
   async function collAll(name){
-    var out = clone(await callBackend('collList',{sheet:SHEET_OF[name]})) || [];
+    var out = clone(await readBackend('collList',{sheet:SHEET_OF[name]})) || [];
     out.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
     return out;
   }
 
   /* ================= 読み込みの管理 ================= */
-  var LOAD_LABEL = { settings:'設定', tasks:'タスク', incomeDay:'収入（記入日）', incomeMonth:'今月の収入', revenue:'売上グラフ', expenses:'支出', workout:'筋トレ' };
+  var LOAD_LABEL = { settings:'設定', tasks:'タスク', incomeDay:'収入（記入日）', incomeMonth:'今月の収入・売上グラフ', expenses:'支出', workout:'筋トレ' };
+  var LOAD_ORDER = ['settings','workout','tasks','incomeDay','incomeMonth','expenses'];
   var LOADERS = {
     settings: function(){ return loadSettings(); },
     tasks: function(){ return loadTasks(); },
     incomeDay: function(){ return loadIncomeDay(document.getElementById('incomeDate').value); },
     incomeMonth: function(){ return loadIncomeMonth(); },
-    revenue: function(){ return loadRevenueSeries(); },
     expenses: function(){ return loadExpenseMonth(); },
     workout: function(){ return loadWorkout(); }
   };
-  // 指定したデータを読み込み、失敗したものを loadErrors に記録する。
+  // 読み込みが終わったデータごとに、関係する表示だけを更新する
+  // （入力中の筋トレ画面などを、ほかのデータの読み込み完了で描き直さないため）
+  var RENDER_FOR = {
+    settings: function(){ updateIncomeLiveTotals(); renderHero(); renderSparkline(); renderIncomeMonthList(); renderExpense(); renderTodayStrip(); },
+    tasks: function(){ renderTasks(); renderTodayStrip(); },
+    incomeDay: function(){ if(!incomeDirty) fillIncomeForm(); else renderIncomeSaveBtn(); renderTodayStrip(); },
+    incomeMonth: function(){ renderIncomeMonthList(); renderHero(); renderSparkline(); renderTodayStrip(); },
+    expenses: function(){ renderExpense(); renderTodayStrip(); },
+    workout: function(){ renderWorkout(); renderTodayStrip(); }
+  };
+
+  // 各データの読み込み状態
+  //   loaded : 一度でも読み込みに成功したか（成功したデータだけを表示に使う）
+  //   pending: 読み込み中か
+  //   error  : すべての再試行に失敗したときのエラー内容
+  var loadState={};
+  function ls(n){ return loadState[n] || (loadState[n]={ loaded:false, pending:false, error:null, seq:0 }); }
+  // 表示用の状態：'ok'（読み込み済み）/ 'loading'（読み込み中）/ 'error'（読み込み失敗）
+  function viewState(n){
+    var s=ls(n);
+    if(s.loaded) return 'ok';
+    if(s.error && !s.pending) return 'error';
+    return 'loading';
+  }
+  // 複数のデータがそろって初めて正しく表示できるもの（例：売上＝収入＋単価の設定）
+  function viewStateAll(names){
+    var st=names.map(viewState);
+    if(st.every(function(x){ return x==='ok'; })) return 'ok';
+    if(st.indexOf('error')>=0) return 'error';
+    return 'loading';
+  }
+  function failedNames(){ return LOAD_ORDER.filter(function(n){ var s=ls(n); return !!s.error && !s.pending; }); }
+  function pendingNames(){ return LOAD_ORDER.filter(function(n){ return ls(n).pending; }); }
+  function labelsOf(names){ return names.map(function(n){ return LOAD_LABEL[n]||n; }).join('・'); }
+  function hasLoadError(n){ return failedNames().indexOf(n)>=0; }
+
+  // 指定したデータを並行して読み込む（同時通信数は postJson 側で最大3件に制限）。
+  // 読み込めたものから順に表示し、失敗したものは「読み込み失敗」として区別する。
   // 失敗しても、前に読み込めていた表示はそのまま残す（空で置き換えない）。
   async function runLoads(names){
-    var results = await Promise.allSettled(names.map(function(n){ return LOADERS[n](); }));
-    results.forEach(function(r,i){
-      if(r.status==='rejected'){ loadErrors[names[i]]=true; console.error('load failed:',names[i],r.reason); }
-      else { delete loadErrors[names[i]]; }
+    names.forEach(function(n){
+      var s=ls(n);
+      s.pending=true; s.seq++;
+      // 記入日・今日の筋トレは「日付ごと」のデータなので、読み直すときは前の結果を使わない
+      if(n==='incomeDay' || n==='workout') s.loaded=false;
     });
     renderStatusBanner();
-    return results.every(function(r){ return r.status==='fulfilled'; });
+    var results = await Promise.all(names.map(function(n){
+      var s=ls(n), mySeq=s.seq;
+      return Promise.resolve().then(function(){ return LOADERS[n](); }).then(function(){
+        if(s.seq!==mySeq) return true; // もっと新しい読み込みが始まっている
+        s.pending=false; s.loaded=true; s.error=null;
+        safeRun('render:'+n, RENDER_FOR[n]);
+        renderStatusBanner();
+        return true;
+      }, function(e){
+        if(s.seq!==mySeq) return false;
+        s.pending=false;
+        if(e && e.stale) return false; // 保存先の切り替えで中止した読み込み
+        s.error=errMsg(e);
+        console.error('load failed:',n,e);
+        safeRun('render:'+n, RENDER_FOR[n]);
+        renderStatusBanner();
+        return false;
+      });
+    }));
+    renderStatusBanner();
+    return results.every(Boolean);
   }
   async function loadEverything(){
-    // 設定（単価など）を先に読んでから、ほかを並行して読む
-    await runLoads(['settings']);
-    await runLoads(['tasks','incomeDay','incomeMonth','revenue','expenses','workout']);
+    renderAll(); // まず全体を「データを読み込み中…」の表示にする
+    await runLoads(LOAD_ORDER.slice());
     renderAll();
+    if(!versionChecked) checkBackendVersion(); // 待たない（表示を遅らせない）
+  }
+  // 接続先の Code.gs のバージョン確認（旧環境への接続に気づけるようにするため）
+  function checkBackendVersion(){
+    var url=WEBAPP_URL;
+    postJson(url,'ping',{},READ_TIMEOUT_MS).then(function(r){
+      if(url!==WEBAPP_URL) return;
+      backendVersion=(r && r.version) || null;
+      versionChecked=true;
+      renderStatusBanner();
+    }).catch(function(){ /* 確認できなくても動作には影響しない */ });
   }
   function renderStatusBanner(){
     var banner=document.getElementById('statusBanner');
     var textEl=document.getElementById('statusBannerText');
     var retryBtn=document.getElementById('statusRetryBtn');
+    var failed=failedNames();
+    var pending=pendingNames();
+    var firstLoading=pending.filter(function(n){ return !ls(n).loaded; }); // まだ一度も読み込めていないもの
     var lines=[];
-    var failed=Object.keys(loadErrors);
+    var isError=false;
     if(failed.length){
-      lines.push('⚠ 読み込めなかったデータがあります：'+failed.map(function(n){ return LOAD_LABEL[n]||n; }).join('・'));
-      lines.push('表示が0や空でも、記録が消えたわけではありません。通信状態を確認して「再読み込み」を押してください。');
+      isError=true;
+      var neverLoaded=failed.filter(function(n){ return !ls(n).loaded; });
+      var notUpdated=failed.filter(function(n){ return ls(n).loaded; });
+      var okNames=LOAD_ORDER.filter(function(n){ var x=ls(n); return x.loaded && !x.error && !x.pending; });
+      lines.push('⚠ データを読み込めませんでした。記録は削除されていません。再読み込みしてください。');
+      if(!okNames.length && !notUpdated.length && !pending.length){
+        lines.push('保存先に接続できませんでした。電波を確認して「再読み込み」を押してください（保存先のURLは ⚙ の設定で確認できます）。');
+      }
+      if(neverLoaded.length) lines.push('読み込めなかったデータ：'+labelsOf(neverLoaded));
+      if(notUpdated.length) lines.push('最新の状態に更新できなかったデータ（前回の表示のまま）：'+labelsOf(notUpdated));
+      if(okNames.length) lines.push('読み込めたデータ：'+labelsOf(okNames));
+      if(firstLoading.length) lines.push('読み込み中：'+labelsOf(firstLoading));
+      lines.push('詳細：'+ls(failed[0]).error);
+    } else if(firstLoading.length){
+      lines.push('データを読み込み中…');
     }
-    if(backendReady && !backendVersion){
+    if(versionChecked && !backendVersion){
+      isError=true;
       lines.push('⚠ 旧バージョンの保存先に接続しています。重複防止が効きません。設定から本番の保存先URLに切り替えてください。');
     }
     textEl.innerHTML = lines.map(esc).join('<br>');
+    textEl.style.color = isError ? 'var(--danger)' : 'var(--ink-muted)';
+    banner.style.borderColor = isError ? 'var(--danger)' : 'var(--border)';
     banner.hidden = lines.length===0;
     retryBtn.hidden = failed.length===0;
   }
-  async function retryFailedLoads(){
-    var failed=Object.keys(loadErrors);
+  async function retryFailedLoads(silent){
+    var failed=failedNames();
     if(!failed.length) return;
-    if(loadErrors.settings) await runLoads(['settings']);
-    var rest=failed.filter(function(n){ return n!=='settings'; });
-    if(rest.length) await runLoads(rest);
-    renderAll();
-    if(Object.keys(loadErrors).length) toast('まだ読み込めないデータがあります。少し待ってから再度お試しください',true);
+    await runLoads(failed);
+    if(silent) return;
+    if(failedNames().length) toast('まだ読み込めないデータがあります。少し待ってから再度お試しください',true);
     else toast('読み込みました');
+  }
+  // 電波が戻ったとき・アプリを再び表示したときに、失敗したデータだけ自動で読み直す（15秒に1回まで）
+  var lastAutoRetryAt=0;
+  function autoRetryIfNeeded(){
+    if(!WEBAPP_URL || !failedNames().length || pendingNames().length) return;
+    if(Date.now()-lastAutoRetryAt < 15000) return;
+    lastAutoRetryAt=Date.now();
+    retryFailedLoads(true);
   }
 
   /* ================= boot ================= */
@@ -966,25 +1111,15 @@
     startClock();
     document.getElementById('incomeDate').value = todayStr();
     document.getElementById('exDate').value = todayStr();
-    renderIncomeSaveBtn();
-    renderWorkout();
 
+    // 初期設定の画面は「URLが本当に未設定」のときだけ出す。
+    // 通信の遅れや失敗では出さない（保存済みのURLも変更・削除しない）。
     if(!WEBAPP_URL){
+      renderAll();
       showSetupModal('');
-      return; // Web App URLが未設定の間はデータ読み込みを行わない
-    }
-
-    try{
-      var r = await postJson(WEBAPP_URL,'ping',{});
-      backendReady = !!(r && r.pong);
-      backendVersion = (r && r.version) || null;
-    }catch(e){
-      backendReady=false;
-    }
-    if(!backendReady){
-      showSetupModal('前回の保存先に接続できませんでした。電波を確認して「保存して接続」を押してください。');
       return;
     }
+    backendReady = true;
     await loadEverything();
   }
 
@@ -1038,7 +1173,9 @@
         toast('前日の筋トレ記録が保存できていないため、日付の切り替えを待っています。「再保存」を押してください',true);
         return;
       }
-      var names=['workout','incomeMonth','revenue','expenses'];
+      var names=['workout','incomeMonth','expenses'];
+      // 日付が変わると「今日の売上・支出・今月の範囲」が変わるので、前の日の結果は表示に使わない
+      ls('incomeMonth').loaded=false; ls('expenses').loaded=false;
       var incomeDateInput=document.getElementById('incomeDate');
       var exDateInput=document.getElementById('exDate');
       // 収入に保存していない入力がある場合は、記入日を勝手に切り替えない（入力を消さないため）
@@ -1046,9 +1183,10 @@
       if(exDateInput.value===prevDate){ exDateInput.value=newDate; }
       await runLoads(names);
       renderAll();
-      toast(Object.keys(loadErrors).length
+      var anyFailed = failedNames().length>0;
+      toast(anyFailed
         ? '日付が変わりましたが、一部のデータを読み込めませんでした'
-        : '日付が変わったので、筋トレメニューと集計を更新しました', Object.keys(loadErrors).length>0);
+        : '日付が変わったので、筋トレメニューと集計を更新しました', anyFailed);
     }catch(e){ console.error('day rollover failed',e); }
     finally{ rollingOver=false; }
   }
@@ -1095,6 +1233,14 @@
     });
   }
   function renderTasks(){
+    var st=viewState('tasks');
+    if(st!=='ok'){
+      document.getElementById('taskOpenCount').textContent = st==='error' ? '—' : '…';
+      document.getElementById('taskDoneCount').textContent = st==='error' ? '—' : '…';
+      document.getElementById('taskOpenList').innerHTML='<div class="empty-note">'+(st==='error' ? 'タスクを読み込めませんでした。記録は削除されていません。' : 'データを読み込み中…')+'</div>';
+      document.getElementById('taskDoneList').innerHTML='<div class="empty-note">'+(st==='error' ? '—' : 'データを読み込み中…')+'</div>';
+      return;
+    }
     var open=tasksCache.filter(function(t){return !t.done;});
     var done=tasksCache.filter(function(t){return t.done;});
     document.getElementById('taskOpenCount').textContent=open.length+'件';
@@ -1150,21 +1296,21 @@
       if(seq===incomeLoadSeq) renderIncomeSaveBtn();
     }
   }
+  // 今月の収入と直近7日の売上グラフを、1回の通信でまとめて読む（通信回数を減らすため）
   async function loadIncomeMonth(){
-    var r = monthRange(todayStr());
-    incomeMonthDocs = await collQueryRange('income','date',r.first,r.last,'asc');
-  }
-  async function loadRevenueSeries(){
-    var end=todayStr();
-    var start=addDaysStr(end,-6);
-    var docs = await collQueryRange('income','date',start,end,'asc');
+    var today=todayStr();
+    var r = monthRange(today);
+    var weekStart=addDaysStr(today,-6);
+    var ge = weekStart<r.first ? weekStart : r.first;
+    var docs = await collQueryRange('income','date',ge,r.last,'asc');
     var byDate={}; docs.forEach(function(d){ byDate[d.date]=d; });
     var series=[];
     for(var i=6;i>=0;i--){
-      var ds=addDaysStr(end,-i);
-      series.push({date:ds, total: dayRevenue(byDate[ds])});
+      var ds=addDaysStr(today,-i);
+      series.push({date:ds, doc: byDate[ds] || null}); // 金額は表示のときに計算する（単価の設定を使うため）
     }
-    revenueSeries=series;
+    incomeMonthDocs = docs.filter(function(d){ return d.date>=r.first && d.date<=r.last; });
+    revenueSeries = series;
   }
   var INCOME_INPUT_IDS=['demaeAmStart','demaeAmEnd','demaeAmAmount','demaePmStart','demaePmEnd','demaePmAmount','videoCount'];
   function fillIncomeForm(){
@@ -1200,8 +1346,16 @@
     document.getElementById('gopalTotalChip').textContent=yen(gp);
     document.getElementById('videoTotalChip').textContent=yen(vid);
     var totalEl=document.getElementById('incomeDayTotal');
-    if(incomeState==='error') totalEl.textContent='この日のデータを読み込めませんでした（記録は消えていません）';
-    else if(incomeState==='loading') totalEl.textContent='この日のデータを読み込み中…';
+    var setSt=viewState('settings');
+    if(setSt!=='ok'){
+      // 単価・固定給の設定がそろうまでは、gopal・動画・合計の金額を確定表示しない
+      var w = setSt==='error' ? '設定を読み込めません' : '…';
+      document.getElementById('gopalTotalChip').textContent=w;
+      document.getElementById('videoTotalChip').textContent=w;
+    }
+    if(incomeState==='error') totalEl.textContent='この日のデータを読み込めませんでした（記録は削除されていません）';
+    else if(incomeState==='loading' || incomeState==='idle') totalEl.textContent='データを読み込み中…';
+    else if(setSt!=='ok') totalEl.textContent='この日の合計：'+(setSt==='error' ? '設定を読み込めないため計算できません' : '設定を読み込み中…');
     else totalEl.textContent='この日の合計：'+yen(am+pm+gp+vid);
   }
   // 保存ボタンと入力欄の状態。読み込みに成功した日だけ入力・保存できる。
@@ -1218,10 +1372,9 @@
   }
   // 記入日を変えたとき・再読み込みのとき
   async function reloadIncomeDayFor(dateStr){
-    try{ await loadIncomeDay(dateStr); delete loadErrors.incomeDay; }
-    catch(e){ loadErrors.incomeDay=true; toast('収入データを読み込めませんでした：'+errMsg(e),true); }
-    renderStatusBanner();
-    if(document.getElementById('incomeDate').value===dateStr) fillIncomeForm();
+    await runLoads(['incomeDay']);
+    if(hasLoadError('incomeDay')) toast('収入データを読み込めませんでした：'+ls('incomeDay').error+'（記録は削除されていません）',true);
+    if(document.getElementById('incomeDate').value===dateStr && !incomeDirty) fillIncomeForm();
   }
   async function saveIncomeDay(){
     var dateInput=document.getElementById('incomeDate');
@@ -1253,10 +1406,16 @@
     }
     if(incomeLoadedDate===dateStr){ incomeDayDoc=data; incomeDirty=false; }
     toast(dateStr+' を保存しました');
-    await runLoads(['incomeMonth','revenue']);
+    await runLoads(['incomeMonth']);
     renderIncomeMonthList(); renderHero(); renderSparkline(); renderTodayStrip();
   }
   function renderIncomeMonthList(){
+    var st=viewStateAll(['incomeMonth','settings']);
+    if(st!=='ok'){
+      document.getElementById('incomeMonthCount').textContent = st==='error' ? '—' : '…';
+      document.getElementById('incomeMonthList').innerHTML='<div class="empty-note">'+(st==='error' ? '今月の収入を読み込めませんでした。記録は削除されていません。' : 'データを読み込み中…')+'</div>';
+      return;
+    }
     document.getElementById('incomeMonthCount').textContent=incomeMonthDocs.length+'日分';
     if(!incomeMonthDocs.length){ document.getElementById('incomeMonthList').innerHTML='<div class="empty-note">今月の記録はまだありません</div>'; return; }
     var sorted=incomeMonthDocs.slice().sort(function(a,b){ return a.date<b.date?1:-1; });
@@ -1273,19 +1432,24 @@
 
   /* ================= hero / sparkline / today strip ================= */
   function renderHero(){
+    var st=viewStateAll(['incomeMonth','settings']);
+    // 読み込み中は「…」（長い文字だと右の売上グラフの位置がずれるため）
+    if(st!=='ok'){ document.getElementById('monthRevenue').textContent = st==='error' ? '読込失敗' : '…'; return; }
     var total=incomeMonthDocs.reduce(function(s,d){ return s+dayRevenue(d); },0);
     document.getElementById('monthRevenue').textContent=yen(total);
   }
   function renderSparkline(){
     var svg=document.getElementById('sparkline');
+    if(viewStateAll(['incomeMonth','settings'])!=='ok'){ svg.innerHTML=''; return; }
     var w=180,h=44,pad=3;
-    var max=Math.max.apply(null,revenueSeries.map(function(p){return p.total;}).concat([1]));
+    var totals=revenueSeries.map(function(p){ return dayRevenue(p.doc); });
+    var max=Math.max.apply(null,totals.concat([1]));
     var n=revenueSeries.length||1;
     var bw=(w-pad*2)/n*0.62;
     var gap=(w-pad*2)/n;
     var bars='';
     revenueSeries.forEach(function(p,i){
-      var bh=Math.max(2,(p.total/max)*(h-pad*2));
+      var bh=Math.max(2,(totals[i]/max)*(h-pad*2));
       var x=pad+i*gap+(gap-bw)/2;
       var y=h-pad-bh;
       var isToday = i===revenueSeries.length-1;
@@ -1309,11 +1473,17 @@
     } else if(workoutState==='error'){
       wLabel='読込失敗';
     }
+    if(!workoutLogToday && workoutState==='loading'){ wLabel='…'; wSub='読み込み中'; }
+    // 読み込めていないデータは 0 と表示せず「…（読み込み中）」「読込失敗」と表示する
+    function chip(label, st, valueHtml, sub, mono){
+      if(st!=='ok'){ valueHtml = st==='error' ? '読込失敗' : '…'; sub = st==='error' ? '記録は削除されていません' : '読み込み中'; mono=false; }
+      return '<div class="stat-chip"><span class="stat-label">'+label+'</span><span class="stat-value'+(mono?' mono':'')+'">'+valueHtml+'</span>'+(sub?'<span class="stat-sub">'+esc(sub)+'</span>':'')+'</div>';
+    }
     var html=''
-      +'<div class="stat-chip"><span class="stat-label">今日の売上</span><span class="stat-value mono">'+yen(todayRev)+'</span></div>'
-      +'<div class="stat-chip"><span class="stat-label">今日の支出</span><span class="stat-value mono">'+yen(todayExpense)+'</span></div>'
+      +chip('今日の売上', viewStateAll(['incomeMonth','settings']), yen(todayRev), '', true)
+      +chip('今日の支出', viewState('expenses'), yen(todayExpense), '', true)
       +'<div class="stat-chip"><span class="stat-label">筋トレ</span><span class="stat-value">'+esc(wLabel)+'</span><span class="stat-sub">'+esc(wSub)+'</span></div>'
-      +'<div class="stat-chip"><span class="stat-label">タスク残</span><span class="stat-value">'+openTasks+'件</span></div>';
+      +chip('タスク残', viewState('tasks'), openTasks+'件', '', false);
     document.getElementById('todayStrip').innerHTML=html;
   }
 
@@ -1355,13 +1525,23 @@
     });
   }
   function renderExpense(){
+    var st=viewState('expenses');
+    var setSt=viewState('settings');
+    var fill=document.getElementById('expenseProgress');
+    document.getElementById('expenseBudgetLabel').textContent = setSt==='ok' ? '予算 '+yen(settings.expenseBudget)+' 中' : (setSt==='error' ? '予算：設定を読み込めません' : '予算：読み込み中…');
+    if(st!=='ok'){
+      var msg = st==='error' ? '支出を読み込めませんでした。記録は削除されていません。' : 'データを読み込み中…';
+      document.getElementById('expenseMonthTotal').textContent = st==='error' ? '読込失敗' : '…';
+      fill.style.width='0%'; fill.classList.remove('over');
+      document.getElementById('expenseCategoryBars').innerHTML='<div class="empty-note">'+msg+'</div>';
+      document.getElementById('expenseList').innerHTML='<div class="empty-note">'+msg+'</div>';
+      return;
+    }
     var total=expenseMonthDocs.reduce(function(s,e){return s+(+e.amount||0);},0);
     document.getElementById('expenseMonthTotal').textContent=yen(total);
-    document.getElementById('expenseBudgetLabel').textContent='予算 '+yen(settings.expenseBudget)+' 中';
-    var pct=settings.expenseBudget>0 ? clamp((total/settings.expenseBudget)*100,0,100) : 0;
-    var fill=document.getElementById('expenseProgress');
+    var pct=(setSt==='ok' && settings.expenseBudget>0) ? clamp((total/settings.expenseBudget)*100,0,100) : 0;
     fill.style.width=pct+'%';
-    fill.classList.toggle('over', total>settings.expenseBudget);
+    fill.classList.toggle('over', setSt==='ok' && total>settings.expenseBudget);
 
     var byCat={};
     expenseMonthDocs.forEach(function(e){ var c=e.category||'その他'; byCat[c]=(byCat[c]||0)+(+e.amount||0); });
@@ -1451,6 +1631,7 @@
   // G. 変更点：今日・昨日の記録の読み込みに「失敗」した場合は、例外で中断し、
   //    今日の記録を新しく作ったり上書きしたりしない（「記録なし」と「通信失敗」を区別する）。
   async function ensureTodayWorkout(){
+    var url=WEBAPP_URL;
     var t=todayStr();
     var existing = await docGet('workoutLog/'+t);   // 通信失敗ならここで中断
     if(existing && isValidWorkoutLog(existing)){ workoutLogToday=existing; return; }
@@ -1468,7 +1649,22 @@
     }
     var assignedKey=QUEUE[newIndex].key;
     var log={ date:t, queueIndex:newIndex, assignedKey:assignedKey, effectiveKey:assignedKey, manualOverride:false, carried:carried, items:buildItemsFor(assignedKey) };
-    await docSet('workoutLog/'+t, log);             // 保存できたときだけ今日のメニューとして使う
+    // 保存できたときだけ今日のメニューとして使う。
+    // 一時的な通信失敗なら、まず今日の記録を読み直す（応答だけ届かず実は保存できていた場合は、それを使う）。
+    // 無ければもう一度作る。これを最大3回まで行う（上書き・重複は起きない）。
+    for(var attempt=0; ; attempt++){
+      if(url!==WEBAPP_URL) throw staleError();        // 途中で保存先が変わったら作らない
+      try{
+        await docSet('workoutLog/'+t, log);
+        break;
+      }catch(e){
+        if(!e.retryable || attempt>=READ_RETRY_DELAYS_MS.length) throw e;
+        await sleep(READ_RETRY_DELAYS_MS[attempt]);
+        var again = await docGet('workoutLog/'+t);    // 通信失敗ならここで中断（作らない）
+        if(again && isValidWorkoutLog(again)){ workoutLogToday=again; return; }
+      }
+    }
+    if(url!==WEBAPP_URL) throw staleError();
     workoutLogToday=log;
   }
   async function loadWorkout(){
@@ -1477,6 +1673,7 @@
       await ensureTodayWorkout();
       workoutState='ok';
     }catch(e){
+      if(e && e.stale) throw e;
       // 前日の記録を「今日」として表示し続けないようにする
       if(!workoutLogToday || workoutLogToday.date!==todayStr()) workoutLogToday=null;
       workoutState = workoutLogToday ? 'ok' : 'error';
@@ -1698,7 +1895,7 @@
     statusEl.textContent='接続を確認しています…';
     var r;
     try{
-      r = await postJson(url,'ping',{});
+      r = await readRequest(url,'ping',{},false); // 一時的な失敗なら自動で再試行
       if(!r || !r.pong) throw new Error('応答が正しくありません');
     }catch(e){
       statusEl.textContent='接続できませんでした：'+errMsg(e)+'（URLを確認してください）';
@@ -1708,12 +1905,13 @@
     WEBAPP_URL=url;
     localStorage.setItem('gl_webapp_url', url);
     backendReady=true;
-    backendVersion=r.version||null;
     resetDataState();
+    backendVersion=r.version||null;
+    versionChecked=true;
     renderAll();
     statusEl.textContent='接続できました。データを読み込んでいます…';
     await loadEverything();
-    statusEl.textContent = Object.keys(loadErrors).length ? '接続しましたが、一部のデータを読み込めませんでした' : '接続できました';
+    statusEl.textContent = failedNames().length ? '接続しましたが、一部のデータを読み込めませんでした' : '接続できました';
     return true;
   }
 
@@ -1749,7 +1947,7 @@
       withBusy(btn,'読み込み中...',async function(){
         await runLoads(['workout']);
         renderWorkout(); renderTodayStrip();
-        if(loadErrors.workout) toast('まだ読み込めません。少し待ってから再度お試しください',true);
+        if(hasLoadError('workout')) toast('まだ読み込めません。少し待ってから再度お試しください',true);
       });
     });
     document.getElementById('workoutSaveRetryBtn').addEventListener('click',async function(){
@@ -1840,7 +2038,7 @@
     });
 
     document.getElementById('statusRetryBtn').addEventListener('click',function(){
-      withBusy(this,'読み込み中...',retryFailedLoads);
+      withBusy(this,'読み込み中...',function(){ return retryFailedLoads(false); });
     });
 
     document.getElementById('settingsBtn').addEventListener('click',function(){
@@ -1852,7 +2050,7 @@
       var saveBtn=document.getElementById('setSaveBtn');
       saveBtn.disabled=!settingsLoaded;
       saveBtn.textContent= settingsLoaded ? '保存' : '設定を読み込めていません';
-      document.getElementById('setVersionInfo').textContent='アプリ: '+APP_VERSION+'　／　保存先: '+(backendVersion||(backendReady?'旧バージョン':'未接続'));
+      document.getElementById('setVersionInfo').textContent='アプリ: '+APP_VERSION+'　／　保存先: '+(backendVersion||(!backendReady?'未接続':(versionChecked?'旧バージョン':'確認中')));
       document.getElementById('settingsModal').hidden=false;
     });
     document.getElementById('setCloseBtn').addEventListener('click',function(){ document.getElementById('settingsModal').hidden=true; });
@@ -1914,6 +2112,10 @@
         }
       });
     });
+
+    // 電波が戻ったとき・アプリを再表示したときに、読み込めなかったデータだけ自動で読み直す
+    window.addEventListener('online', autoRetryIfNeeded);
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') autoRetryIfNeeded(); });
 
     // 保存中・保存していない入力があるときにページを閉じようとしたら警告する
     window.addEventListener('beforeunload',function(e){
